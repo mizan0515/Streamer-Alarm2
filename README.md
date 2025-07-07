@@ -201,29 +201,13 @@ release/
 
 ---
 
-## 🎨 시스템 트레이
+## 🎨 UI구성
 
-### 🖼️ 동적 아이콘
+<img width="800"  alt="Image" src="https://github.com/user-attachments/assets/4c3b2a61-76ad-4cd7-896d-52773adb915b" />
 
-```
-🟢 모니터링 활성 + 라이브 없음    → 기본 아이콘
-🔴 모니터링 활성 + 라이브 1명     → 빨간 점 1개
-🔴 모니터링 활성 + 라이브 3명     → 빨간 점 3개  
-⚫ 모니터링 비활성               → 회색 아이콘
-```
+<img width="800" alt="Image" src="https://github.com/user-attachments/assets/f3bc2b58-9b9c-4c42-89a9-c220f0e550bb" />
 
-### 📋 컨텍스트 메뉴
-
-```
-📺 창 열기/숨기기
-▶️ 모니터링 시작/중지  
-🔔 테스트 알림
-📊 현재 상태
-├── 활성 스트리머: 7명
-├── 라이브 중: 2명  
-└── 안읽은 알림: 5개
-❌ 종료
-```
+<img width="800"  alt="Image" src="https://github.com/user-attachments/assets/c7d51931-de29-4d84-b374-8468e09c8a12" />
 
 ---
 
