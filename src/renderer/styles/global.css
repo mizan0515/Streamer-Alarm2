@@ -1,0 +1,420 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 커스텀 CSS 변수 */
+:root {
+  --gradient-primary: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  --gradient-secondary: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+  --gradient-success: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+  --gradient-warning: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+  --gradient-danger: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+  --gradient-dark: linear-gradient(135deg, #232526 0%, #414345 100%);
+  --glass-bg: rgba(255, 255, 255, 0.1);
+  --glass-border: rgba(255, 255, 255, 0.2);
+  --shadow-glow: 0 8px 32px rgba(31, 38, 135, 0.37);
+  --shadow-card: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+/* 기본 스타일 */
+@layer base {
+  * {
+    @apply box-border;
+  }
+  
+  body {
+    @apply font-sans text-gray-100;
+    font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    background: linear-gradient(135deg, #0c0c0c 0%, #1a1a2e 50%, #16213e 100%);
+    background-attachment: fixed;
+    min-height: 100vh;
+  }
+  
+  button {
+    @apply focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-transparent;
+  }
+  
+  input, textarea, select {
+    @apply focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent;
+  }
+}
+
+/* 컴포넌트 스타일 */
+@layer components {
+  /* 글래스모피즘 효과 */
+  .glass {
+    background: var(--glass-bg);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--glass-border);
+    box-shadow: var(--shadow-glow);
+  }
+  
+  .glass-card {
+    @apply glass rounded-2xl;
+  }
+  
+  /* 그라디언트 버튼 */
+  .btn {
+    @apply inline-flex items-center justify-center px-6 py-3 text-sm font-semibold rounded-xl transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-transparent transform hover:scale-105 active:scale-95;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+  }
+  
+  .btn-primary {
+    background: var(--gradient-primary);
+    @apply text-white shadow-lg hover:shadow-xl;
+    box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4);
+  }
+  
+  .btn-secondary {
+    background: var(--gradient-secondary);
+    @apply text-white shadow-lg hover:shadow-xl;
+    box-shadow: 0 8px 25px rgba(240, 147, 251, 0.4);
+  }
+  
+  .btn-success {
+    background: var(--gradient-success);
+    @apply text-white shadow-lg hover:shadow-xl;
+    box-shadow: 0 8px 25px rgba(79, 172, 254, 0.4);
+  }
+  
+  .btn-warning {
+    background: var(--gradient-warning);
+    @apply text-gray-900 shadow-lg hover:shadow-xl;
+    box-shadow: 0 8px 25px rgba(67, 233, 123, 0.4);
+  }
+  
+  .btn-danger {
+    background: var(--gradient-danger);
+    @apply text-white shadow-lg hover:shadow-xl;
+    box-shadow: 0 8px 25px rgba(250, 112, 154, 0.4);
+  }
+  
+  .btn-ghost {
+    @apply glass text-gray-200 hover:text-white;
+  }
+  
+  .btn-sm {
+    @apply px-4 py-2 text-xs;
+  }
+  
+  .btn-lg {
+    @apply px-8 py-4 text-base;
+  }
+  
+  /* 모던 카드 스타일 */
+  .card {
+    @apply glass-card shadow-lg transition-all duration-300 hover:shadow-2xl hover:-translate-y-1;
+    box-shadow: var(--shadow-card);
+  }
+  
+  .card-body {
+    @apply p-6;
+  }
+  
+  .card-header {
+    @apply px-6 py-4 border-b border-white/10;
+  }
+  
+  .card-footer {
+    @apply px-6 py-4 border-t border-white/10;
+  }
+  
+  /* 모던 입력 필드 */
+  .input {
+    @apply w-full px-4 py-3 glass rounded-xl text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500/50 focus:border-transparent transition-all duration-300;
+    background: rgba(255, 255, 255, 0.05);
+  }
+  
+  .input:focus {
+    background: rgba(255, 255, 255, 0.1);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(147, 51, 234, 0.3);
+  }
+  
+  .textarea {
+    @apply input resize-none;
+  }
+  
+  .select {
+    @apply input pr-10 cursor-pointer;
+  }
+  
+  /* 모던 스위치 */
+  .switch {
+    @apply relative inline-flex items-center h-7 rounded-full w-12 transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-purple-500/50;
+    background: var(--glass-bg);
+    backdrop-filter: blur(10px);
+    border: 1px solid var(--glass-border);
+  }
+  
+  .switch-enabled {
+    background: var(--gradient-primary);
+    box-shadow: 0 0 20px rgba(102, 126, 234, 0.4);
+  }
+  
+  .switch-disabled {
+    background: rgba(107, 114, 128, 0.3);
+  }
+  
+  .switch-handle {
+    @apply inline-block w-5 h-5 transform bg-white rounded-full transition-all duration-300 shadow-lg;
+  }
+  
+  .switch-handle-enabled {
+    @apply translate-x-6;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+  }
+  
+  .switch-handle-disabled {
+    @apply translate-x-1;
+  }
+  
+  /* 네온 배지 스타일 */
+  .badge {
+    @apply inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold backdrop-blur-sm;
+  }
+  
+  .badge-primary {
+    @apply bg-purple-500/20 text-purple-300 border border-purple-500/30;
+    box-shadow: 0 0 8px rgba(147, 51, 234, 0.2);
+  }
+  
+  .badge-secondary {
+    @apply bg-gray-500/20 text-gray-300 border border-gray-500/30;
+  }
+  
+  .badge-success {
+    @apply bg-green-500/20 text-green-300 border border-green-500/30;
+    box-shadow: 0 0 8px rgba(34, 197, 94, 0.2);
+  }
+  
+  .badge-warning {
+    @apply bg-yellow-500/20 text-yellow-300 border border-yellow-500/30;
+    box-shadow: 0 0 8px rgba(234, 179, 8, 0.2);
+  }
+  
+  .badge-danger {
+    @apply bg-red-500/20 text-red-300 border border-red-500/30;
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.2);
+  }
+  
+  /* 플랫폼별 네온 색상 */
+  .platform-chzzk {
+    @apply text-red-400;
+    text-shadow: 0 0 4px rgba(248, 113, 113, 0.3);
+  }
+  
+  .platform-twitter {
+    @apply text-blue-400;
+    text-shadow: 0 0 4px rgba(96, 165, 250, 0.3);
+  }
+  
+  .platform-cafe {
+    @apply text-green-400;
+    text-shadow: 0 0 4px rgba(74, 222, 128, 0.3);
+  }
+  
+  /* 고급 애니메이션 */
+  .fade-in {
+    @apply animate-fade-in;
+  }
+  
+  .slide-up {
+    @apply animate-slide-up;
+  }
+  
+  .pulse-slow {
+    @apply animate-pulse-slow;
+  }
+
+  /* 모달 애니메이션 */
+  .animate-scale-up {
+    animation: scaleUp 0.2s ease-out;
+  }
+  
+  /* 네온 로딩 스피너 */
+  .spinner {
+    @apply inline-block w-5 h-5 border-2 border-gray-600 border-t-purple-500 rounded-full animate-spin;
+    box-shadow: 0 0 20px rgba(147, 51, 234, 0.3);
+  }
+  
+  .spinner-sm {
+    @apply w-4 h-4;
+  }
+  
+  .spinner-lg {
+    @apply w-8 h-8 border-4;
+  }
+  
+  /* 네온 글로우 효과 */
+  .neon-text {
+    text-shadow: 0 0 2px currentColor;
+  }
+  
+  .neon-text-subtle {
+    text-shadow: none;
+  }
+  
+  /* 호버 효과 */
+  .hover-lift {
+    @apply transition-all duration-300 hover:-translate-y-1 hover:shadow-lg;
+  }
+  
+  .hover-glow {
+    @apply transition-all duration-300;
+  }
+  
+  .hover-glow:hover {
+    box-shadow: 0 0 15px rgba(147, 51, 234, 0.2);
+  }
+}
+
+/* 유틸리티 스타일 */
+@layer utilities {
+  /* 스크롤바 숨기기 */
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+  
+  /* 네온 스크롤바 */
+  .scrollbar-neon {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(147, 51, 234, 0.6) transparent;
+  }
+  
+  .scrollbar-neon::-webkit-scrollbar {
+    width: 8px;
+  }
+  
+  .scrollbar-neon::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 10px;
+  }
+  
+  .scrollbar-neon::-webkit-scrollbar-thumb {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border-radius: 10px;
+    box-shadow: 0 0 10px rgba(147, 51, 234, 0.5);
+  }
+  
+  .scrollbar-neon::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
+    box-shadow: 0 0 15px rgba(147, 51, 234, 0.8);
+  }
+  
+  /* 텍스트 선택 */
+  .select-none {
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+  }
+  
+  /* 그라디언트 배경 */
+  .gradient-primary {
+    background: var(--gradient-primary);
+  }
+  
+  .gradient-secondary {
+    background: var(--gradient-secondary);
+  }
+  
+  .gradient-success {
+    background: var(--gradient-success);
+  }
+  
+  .gradient-warning {
+    background: var(--gradient-warning);
+  }
+  
+  .gradient-danger {
+    background: var(--gradient-danger);
+  }
+  
+  /* 네온 테두리 */
+  .border-neon-purple {
+    border: 1px solid rgba(147, 51, 234, 0.5);
+    box-shadow: 0 0 20px rgba(147, 51, 234, 0.3);
+  }
+  
+  .border-neon-blue {
+    border: 1px solid rgba(59, 130, 246, 0.5);
+    box-shadow: 0 0 20px rgba(59, 130, 246, 0.3);
+  }
+  
+  .border-neon-green {
+    border: 1px solid rgba(34, 197, 94, 0.5);
+    box-shadow: 0 0 20px rgba(34, 197, 94, 0.3);
+  }
+  
+  /* 애니메이션 유틸리티 */
+  .animate-float {
+    animation: float 3s ease-in-out infinite;
+  }
+  
+  @keyframes float {
+    0%, 100% { transform: translateY(0px); }
+    50% { transform: translateY(-10px); }
+  }
+  
+  .animate-glow {
+    animation: glow 2s ease-in-out infinite alternate;
+  }
+  
+  @keyframes glow {
+    from { box-shadow: 0 0 8px rgba(147, 51, 234, 0.2); }
+    to { box-shadow: 0 0 12px rgba(147, 51, 234, 0.3); }
+  }
+  
+  /* 포커스 링 */
+  .focus-visible-only {
+    @apply focus:outline-none;
+  }
+  
+  .focus-visible-only:focus-visible {
+    @apply ring-2 ring-offset-2 ring-purple-500 ring-offset-transparent;
+    box-shadow: 0 0 20px rgba(147, 51, 234, 0.5);
+  }
+  
+  /* 라인 클램프 */
+  .line-clamp-1 {
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 1;
+  }
+  
+  .line-clamp-2 {
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+  
+  .line-clamp-3 {
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+  }
+
+  /* 키프레임 애니메이션 */
+  @keyframes scaleUp {
+    from {
+      opacity: 0;
+      transform: scale(0.95);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+}

@@ -1,0 +1,111 @@
+{
+  "name": "streamer-alarm-system",
+  "productName": "Streamer Alarm System",
+  "version": "2.0.0",
+  "description": "Korean VTuber streamer monitoring and notification system",
+  "main": "dist/main.js",
+  "homepage": "./",
+  "author": {
+    "name": "Streamer Alarm Team"
+  },
+  "license": "MIT",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:renderer\" \"npm run dev:main\"",
+    "dev:main": "cross-env NODE_ENV=development webpack --config webpack.main.config.js --mode development --watch",
+    "dev:renderer": "cross-env NODE_ENV=development webpack serve --config webpack.renderer.config.js --mode development",
+    "build": "npm run build:main && npm run build:renderer",
+    "build:main": "cross-env NODE_ENV=production webpack --config webpack.main.config.js --mode production",
+    "build:renderer": "cross-env NODE_ENV=production webpack --config webpack.renderer.config.js --mode production",
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "npm run build && electron-builder",
+    "postinstall": "electron-builder install-app-deps && npx electron-rebuild && playwright install chromium"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^20.10.5",
+    "@types/node-notifier": "^8.0.5",
+    "@types/react": "^18.2.45",
+    "@types/react-dom": "^18.2.17",
+    "@typescript-eslint/eslint-plugin": "^6.15.0",
+    "@typescript-eslint/parser": "^6.15.0",
+    "autoprefixer": "^10.4.21",
+    "canvas": "^3.1.2",
+    "concurrently": "^8.2.2",
+    "cross-env": "^7.0.3",
+    "css-loader": "^6.8.1",
+    "electron": "^28.1.0",
+    "electron-builder": "^24.9.1",
+    "electron-rebuild": "^3.2.9",
+    "eslint": "^8.56.0",
+    "eslint-plugin-react": "^7.33.2",
+    "eslint-plugin-react-hooks": "^4.6.0",
+    "file-loader": "^6.2.0",
+    "html-webpack-plugin": "^5.6.0",
+    "postcss": "^8.5.6",
+    "postcss-loader": "^8.1.1",
+    "style-loader": "^3.3.3",
+    "ts-loader": "^9.5.1",
+    "typescript": "^5.3.3",
+    "webpack": "^5.89.0",
+    "webpack-cli": "^5.1.4",
+    "webpack-dev-server": "^4.15.1"
+  },
+  "dependencies": {
+    "axios": "^1.6.2",
+    "better-sqlite3": "^9.6.0",
+    "node-notifier": "^10.0.1",
+    "playwright": "^1.40.1",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.20.1",
+    "rss-parser": "^3.13.0",
+    "tailwindcss": "^3.3.6"
+  },
+  "build": {
+    "appId": "com.streameralarm.app",
+    "productName": "Streamer Alarm System",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "assets/icon.ico",
+      "assets/icon.png",
+      "package.json"
+    ],
+    "extraFiles": [],
+    "extraResources": [],
+    "asarUnpack": [
+      "node_modules/better-sqlite3/**/*",
+      "node_modules/canvas/**/*",
+      "node_modules/@mapbox/**/*",
+      "node_modules/node-addon-api/**/*",
+      "node_modules/playwright/**/*",
+      "node_modules/playwright-core/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "runAfterFinish": true,
+      "perMachine": false
+    },
+    "afterPack": "./scripts/after-pack.js",
+    "nodeGypRebuild": false,
+    "buildDependenciesFromSource": false,
+    "npmRebuild": false
+  }
+}

@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: https:; font-src 'self' data: https:; connect-src 'self' https:;">
+    <title>Streamer Alarm System</title>
+    <!-- 로컬 폰트 사용으로 변경 -->
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            background-color: #1a1a1a;
+            color: #ffffff;
+        }
+        
+        #root {
+            width: 100%;
+            height: 100vh;
+            overflow: hidden;
+        }
+        
+        /* 로딩 스피너 */
+        .loading-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #1a1a1a;
+        }
+        
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #333;
+            border-top: 4px solid #3b82f6;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        /* 버튼 호버 효과 */
+        button:hover {
+            transform: translateY(-1px);
+            transition: all 0.2s ease;
+        }
+        
+        /* 스크롤바 스타일 */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: #2a2a2a;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: #4a4a4a;
+            border-radius: 4px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: #5a5a5a;
+        }
+    </style>
+</head>
+<body>
+    <div id="root">
+        <div class="loading-container">
+            <div class="loading-spinner"></div>
+            <p style="margin-top: 20px; color: white;">로딩 중...</p>
+        </div>
+    </div>
+    
+    <!-- 디버깅용 스크립트 -->
+    <script>
+        console.log('HTML loaded, DOM ready');
+        
+        // 5초 후에도 React가 로드되지 않으면 디버그 모드 실행
+        setTimeout(() => {
+            const root = document.getElementById('root');
+            if (root && root.innerHTML.includes('loading-container')) {
+                console.warn('React app not loaded after 5 seconds, showing debug info');
+                root.innerHTML = `
+                    <div style="
+                        width: 100vw;
+                        height: 100vh;
+                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        font-family: Arial, sans-serif;
+                        color: white;
+                    ">
+                        <div style="
+                            text-align: center;
+                            background: rgba(255, 255, 255, 0.1);
+                            padding: 40px;
+                            border-radius: 20px;
+                            backdrop-filter: blur(10px);
+                            max-width: 500px;
+                        ">
+                            <h1 style="font-size: 48px; margin-bottom: 20px;">⚠️</h1>
+                            <h2 style="margin-bottom: 20px;">React 앱 로딩 실패</h2>
+                            <p style="margin-bottom: 20px; opacity: 0.8; line-height: 1.5;">
+                                React 애플리케이션이 정상적으로 로드되지 않았습니다.<br>
+                                개발자 도구(F12)를 열어 콘솔 오류를 확인하세요.
+                            </p>
+                            <button onclick="location.reload()" style="
+                                background: #3b82f6;
+                                color: white;
+                                border: none;
+                                padding: 12px 24px;
+                                border-radius: 8px;
+                                cursor: pointer;
+                                font-size: 16px;
+                                margin-right: 10px;
+                            ">
+                                새로고침
+                            </button>
+                            <button onclick="require('electron').ipcRenderer.invoke('quit-app')" style="
+                                background: #ef4444;
+                                color: white;
+                                border: none;
+                                padding: 12px 24px;
+                                border-radius: 8px;
+                                cursor: pointer;
+                                font-size: 16px;
+                            ">
+                                앱 종료
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }
+        }, 5000);
+        
+        // 전역 오류 캐치
+        window.addEventListener('error', (e) => {
+            console.error('Global error:', e.error);
+        });
+        
+        window.addEventListener('unhandledrejection', (e) => {
+            console.error('Unhandled promise rejection:', e.reason);
+        });
+    </script>
+</body>
+</html>

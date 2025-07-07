@@ -1,0 +1,122 @@
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv/
+.env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+*.tmp
+.DS_Store      # macOS
+Thumbs.db      # Windows
+ehthumbs.db    # Windows
+*.stackdump    # Windows crash log
+
+# Application specific
+data/browser_data/
+data/*.json
+!data/streamers.json
+logs/
+*.log
+
+# Temporary files
+temp/
+tmp/
+*.bak
+*.backup
+*.tmp
+*.swp
+*.bak
+
+# Sensitive files
+.env
+config.ini
+secrets.json
+.env.*
+
+# Browser automation
+playwright-browsers/
+chrome-data/
+
+# node_modules: 의존성 모듈 (절대 커밋 금지)
+node_modules/
+
+# 빌드 산출물
+/dist/
+/build/
+/release/
+*.log
+
+# Electron/윈도우 인스톨러 산출물
+*.exe
+*.dll
+*.msi
+
+
+# vscode/IDE 설정
+.vscode/
+.idea/
+*.code-workspace
+
+# 빌드 캐시
+.cache/
+*.tsbuildinfo
+
+# 테스트 커버리지
+coverage/
+.nyc_output/
+
+# Playwright/브라우저 관련
+cafe_browser_data/
+playwright-report/
+test-results/
+
+# 로그, 데이터베이스, 런타임 데이터
+logs/
+*.log
+*.sqlite
+*.db
+%USERPROFILE%/AppData/Roaming/Streamer Alarm System/
+!src/assets/  # 실제 배포용 리소스는 포함
+
+# 패키지 매니저 lock 파일 (공동 개발시 필요에 따라 예외)
+# yarn.lock
+# package-lock.json
+# pnpm-lock.yaml
+
+# TypeScript 빌드 아티팩트
+*.js
+*.js.map
+*.d.ts
+
+# ESLint, Prettier 캐시
+.eslintcache
+.prettiercache
+
+# 기타 IDE/에디터
+*.sublime-workspace
+*.sublime-project
+
+# SQLite DB 파일 (런타임 생성)
+streamer-alarm.db
+
+# -------------------------------
+# 예외 처리: 소스/설정 등 반드시 포함할 폴더
+# -------------------------------
+!src/
+!assets/
+!package.json
+!tailwind.config.js
+!tsconfig.json
+!webpack.*.js
+
+
+
+CLAUDE.md
