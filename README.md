@@ -1,8 +1,8 @@
 # 🚀 Streamer Alarm System v2.0
 
-> 차세대 Electron 기반 VTuber 스트리머 실시간 모니터링 & 알림 시스템
+> 차세대 Electron 기반 스트리머 실시간 모니터링 & 알림 시스템
 
-한국 VTuber 스트리머들을 **여러 플랫폼에서 동시에** 실시간 모니터링하고, **즉시 알림**을 전송하는 고성능 데스크톱 애플리케이션입니다.
+치지직 스트리머들을 **여러 플랫폼에서 동시에** 실시간 모니터링하고, **즉시 알림**을 전송하는 데스크톱 애플리케이션입니다.
 
 [![Electron](https://img.shields.io/badge/Electron-v28.1.0-blue.svg)](https://electronjs.org/)
 [![React](https://img.shields.io/badge/React-v18.2.0-blue.svg)](https://reactjs.org/)
@@ -68,7 +68,7 @@
 ### 📦 설치
 
 #### 🚀 사용자용 (추천)
-1. **[Releases 페이지](https://github.com/your-username/streamer-alarm2/releases)**에서 최신 `Streamer Alarm System Setup.exe` 다운로드
+1. [Releases 페이지](https://github.com/mizan0515/Streamer-Alarm2/releases)에서 최신 `Streamer Alarm System Setup.exe` 다운로드
 2. 설치 프로그램 실행 → **Playwright 브라우저 자동 설치**
 3. 앱 실행 → 즉시 사용 가능 ✅
 
@@ -201,29 +201,13 @@ release/
 
 ---
 
-## 🎨 시스템 트레이
+## 🎨 UI구성
 
-### 🖼️ 동적 아이콘
+<img width="800"  alt="Image" src="https://github.com/user-attachments/assets/4c3b2a61-76ad-4cd7-896d-52773adb915b" />
 
-```
-🟢 모니터링 활성 + 라이브 없음    → 기본 아이콘
-🔴 모니터링 활성 + 라이브 1명     → 빨간 점 1개
-🔴 모니터링 활성 + 라이브 3명     → 빨간 점 3개  
-⚫ 모니터링 비활성               → 회색 아이콘
-```
+<img width="800" alt="Image" src="https://github.com/user-attachments/assets/f3bc2b58-9b9c-4c42-89a9-c220f0e550bb" />
 
-### 📋 컨텍스트 메뉴
-
-```
-📺 창 열기/숨기기
-▶️ 모니터링 시작/중지  
-🔔 테스트 알림
-📊 현재 상태
-├── 활성 스트리머: 7명
-├── 라이브 중: 2명  
-└── 안읽은 알림: 5개
-❌ 종료
-```
+<img width="800"  alt="Image" src="https://github.com/user-attachments/assets/c7d51931-de29-4d84-b374-8468e09c8a12" />
 
 ---
 
@@ -483,28 +467,6 @@ npm run pack
 
 ---
 
-## 🚀 로드맵
-
-### 🎯 v2.1 (예정)
-- [ ] 🌍 **다국어 지원** - 영어/일본어 추가
-- [ ] 🎨 **커스텀 테마** - 사용자 정의 색상 스킴
-- [ ] 📈 **통계 대시보드** - 스트리머별 활동 분석
-- [ ] 🔊 **음성 알림** - TTS 알림 옵션
-
-### 🎯 v2.2 (예정)
-- [ ] 📱 **모바일 알림** - Pushbullet/Telegram 연동
-- [ ] 🤖 **Discord 봇** - 디스코드 서버 알림
-- [ ] 🕐 **스케줄 알림** - 정기 방송 시간 예측
-- [ ] 💾 **클라우드 동기화** - 설정 백업/복원
-
-### 🎯 v3.0 (장기)
-- [ ] 🌐 **웹 대시보드** - 원격 모니터링
-- [ ] 🔌 **플러그인 시스템** - 서드파티 확장
-- [ ] 📊 **머신러닝** - 방송 패턴 학습
-- [ ] 🎮 **게임 연동** - OBS/XSplit 통합
-
----
-
 ## 🤝 기여하기
 
 ### 🐛 버그 신고
@@ -514,8 +476,6 @@ npm run pack
 
 ### 💡 기능 제안
 1. **GitHub Discussions** 에서 아이디어 공유
-2. **사용 사례** 구체적으로 설명
-3. **커뮤니티 투표** 참여
 
 ### 🔧 코드 기여
 1. **Fork** 저장소
@@ -532,26 +492,8 @@ npm run pack
 
 ---
 
-## 🙏 감사 인사
-
-### 🔧 오픈소스 라이브러리
-- **Electron** - 크로스 플랫폼 데스크톱 앱 프레임워크
-- **React** - 사용자 인터페이스 라이브러리  
-- **Playwright** - 브라우저 자동화 도구
-- **SQLite** - 경량 관계형 데이터베이스
-- **Tailwind CSS** - 유틸리티 퍼스트 CSS 프레임워크
-
-### 🎨 디자인 영감
-- **Glassmorphism** - 현대적 UI 트렌드
-- **Neon Theme** - 사이버펑크 미학
-- **Material Design** - 구글 디자인 시스템
-
----
-
 <div align="center">
 
 **⭐ 이 프로젝트가 도움이 되었다면 Star를 눌러주세요! ⭐**
-
-Made with ❤️ for VTuber Community
 
 </div>
