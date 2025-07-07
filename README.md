@@ -68,7 +68,7 @@
 ### 📦 설치
 
 #### 🚀 사용자용 (추천)
-1. **[Releases 페이지](https://github.com/your-username/streamer-alarm2/releases)**에서 최신 `Streamer Alarm System Setup.exe` 다운로드
+1. [Releases 페이지](https://github.com/mizan0515/Streamer-Alarm2/releases)에서 최신 `Streamer Alarm System Setup.exe` 다운로드
 2. 설치 프로그램 실행 → **Playwright 브라우저 자동 설치**
 3. 앱 실행 → 즉시 사용 가능 ✅
 
