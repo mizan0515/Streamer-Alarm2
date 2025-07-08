@@ -11,6 +11,7 @@ const electronAPI = {
 
   // 알림 관련
   getNotifications: (options?: any) => ipcRenderer.invoke('get-notifications', options),
+  getTotalNotificationCount: (options?: any) => ipcRenderer.invoke('get-total-notification-count', options),
   deleteAllNotifications: () => ipcRenderer.invoke('delete-all-notifications'),
   markNotificationRead: (notificationId: number) => ipcRenderer.invoke('mark-notification-read', notificationId),
   markAllNotificationsRead: () => ipcRenderer.invoke('mark-all-notifications-read'),

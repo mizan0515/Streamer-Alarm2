@@ -19,6 +19,40 @@ export class CafeMonitor {
   private browserDataPath: string;
   private lastPostIds: Map<string, string> = new Map();
   private isLoggedIn: boolean = false;
+  private loginCheckInProgress: boolean = false;
+  private lastKnownLoginStatus: boolean = false;
+
+  // 카페 시간 파싱 함수
+  private parseCafeDate(dateText: string): Date {
+    try {
+      const now = new Date();
+      const currentYear = now.getFullYear();
+      const currentMonth = now.getMonth();
+      const currentDate = now.getDate();
+
+      // 오늘 작성된 글 (예: "02:23")
+      if (/^\d{2}:\d{2}$/.test(dateText)) {
+        const [hours, minutes] = dateText.split(':').map(Number);
+        const postDate = new Date(currentYear, currentMonth, currentDate, hours, minutes);
+        return postDate;
+      }
+
+      // 이전 날짜 (예: "2025.07.07.")
+      if (/^\d{4}\.\d{2}\.\d{2}\.$/.test(dateText)) {
+        const [year, month, day] = dateText.replace('.', '').split('.').map(Number);
+        const postDate = new Date(year, month - 1, day); // month는 0-based
+        return postDate;
+      }
+
+      // 파싱 실패 시 현재 시간 반환
+      console.warn(`Failed to parse cafe date: ${dateText}, using current time`);
+      return now;
+
+    } catch (error) {
+      console.error(`Error parsing cafe date: ${dateText}`, error);
+      return new Date(); // 백업으로 현재 시간 사용
+    }
+  }
 
   constructor(
     databaseManager: DatabaseManager, 
@@ -137,73 +171,91 @@ export class CafeMonitor {
   }
 
   async checkLoginStatus(): Promise<boolean> {
-    if (!this.page) {
-      await this.setupBrowser();
+    // 동시 실행 방지 - 이미 진행 중이면 기존 결과 반환
+    if (this.loginCheckInProgress) {
+      console.log('🔄 Login check already in progress, returning cached status');
+      return this.lastKnownLoginStatus;
     }
 
+    // 뮤텍스 락 설정
+    this.loginCheckInProgress = true;
+
+    let loginCheckPage: Page | null = null;
+    
     try {
-      // 네이버 메인 페이지에서 로그인 상태 확인 (가장 정확한 방법)
-      console.log('🔍 Checking Naver login status via main page...');
-      await this.page!.goto('https://www.naver.com', { 
-        waitUntil: 'domcontentloaded',
-        timeout: 30000
+      if (!this.context) {
+        await this.setupBrowser();
+      }
+
+      console.log('🔍 Checking Naver login status via isolated page...');
+      
+      // 전용 페이지 생성 (기존 페이지와 격리)
+      loginCheckPage = await this.context!.newPage();
+      
+      // 더 안정적인 페이지 로드 설정
+      await loginCheckPage.goto('https://www.naver.com', { 
+        waitUntil: 'domcontentloaded',  // networkidle 대신 더 안정적인 옵션
+        timeout: 15000  // 타임아웃 단축
       });
       
-      // 페이지 로드 대기
-      await this.page!.waitForTimeout(5000);
-      
-      const loginCheck = await this.page!.evaluate(() => {
-        // 로그인된 상태 확인 요소들
-        const loggedInElement = document.querySelector('.MyView-module__my_info___GNmHz');
-        const nicknameElement = document.querySelector('.MyView-module__nickname___fcxwI');
-        const logoutButton = document.querySelector('.MyView-module__btn_logout___bsTOJ');
-        
-        // 로그인 안된 상태 확인 요소들
-        const notLoggedInElement = document.querySelector('.MyView-module__my_login___tOTgr');
-        const loginButton = document.querySelector('.MyView-module__link_login___HpHMW');
-        
-        // 로그인 상태 판단
-        const isLoggedIn = !!(loggedInElement && nicknameElement);
-        const isLoggedOut = !!(notLoggedInElement && loginButton);
-        
-        // 닉네임 추출 (로그인된 경우)
-        const nickname = nicknameElement ? nicknameElement.textContent?.trim() || '' : '';
-        
-        return {
-          isLoggedIn: isLoggedIn,
-          isLoggedOut: isLoggedOut,
-          nickname: nickname,
-          hasLoggedInElement: !!loggedInElement,
-          hasNicknameElement: !!nicknameElement,
-          hasLogoutButton: !!logoutButton,
-          hasNotLoggedInElement: !!notLoggedInElement,
-          hasLoginButton: !!loginButton,
-          currentUrl: window.location.href
-        };
-      });
-      
-      console.log(`🔍 Login check result:`, loginCheck);
-      
-      // 로그인 상태 판단 및 저장
-      this.isLoggedIn = loginCheck.isLoggedIn;
-      
-      if (loginCheck.isLoggedIn) {
-        console.log(`✅ Naver login status: LOGGED IN (nickname: ${loginCheck.nickname})`);
-        await this.settingsService.updateSetting('needNaverLogin', false);
-      } else {
-        console.log('❌ Naver login status: NOT LOGGED IN');
-        await this.settingsService.updateSetting('needNaverLogin', true);
+      // DOM 요소 대기 (더 관대한 타임아웃)
+      try {
+        await loginCheckPage.waitForSelector('#account', { timeout: 8000 });
+      } catch (selectorError) {
+        console.warn('⚠️ #account selector not found, trying alternative method');
       }
       
-      return this.isLoggedIn;
+      // 로그인 상태 확인
+      const isLoggedIn = await loginCheckPage.evaluate(() => {
+        // 다중 로그인 상태 감지 방법
+        const loginElement = document.querySelector('.MyView-module__my_login___tOTgr');
+        const profileElement = document.querySelector('.MyView-module__my_account_name___n6R_V');
+        const accountElement = document.querySelector('#account .MyView-module__my_nickname___IJ_wH');
+        
+        // 여러 방법으로 로그인 상태 확인
+        return !loginElement || !!profileElement || !!accountElement;
+      });
+      
+      // 상태 업데이트
+      this.isLoggedIn = isLoggedIn;
+      this.lastKnownLoginStatus = isLoggedIn;
+      
+      // 설정 업데이트 (비동기로 처리하되 에러는 무시)
+      this.settingsService.updateSetting('needNaverLogin', !isLoggedIn).catch(err => {
+        console.warn('Failed to update needNaverLogin setting:', err);
+      });
+      
+      console.log(isLoggedIn ? '✅ Naver login status: LOGGED IN' : '❌ Naver login status: NOT LOGGED IN');
+      
+      return isLoggedIn;
+      
     } catch (error) {
       console.error('Failed to check login status:', error);
+      
       // 오류 발생시 안전하게 미로그인으로 처리
       this.isLoggedIn = false;
-      await this.settingsService.updateSetting('needNaverLogin', true);
+      this.lastKnownLoginStatus = false;
+      
+      // 설정 업데이트 (에러 무시)
+      this.settingsService.updateSetting('needNaverLogin', true).catch(() => {});
+      
       return false;
+      
+    } finally {
+      // 전용 페이지 정리
+      if (loginCheckPage) {
+        try {
+          await loginCheckPage.close();
+        } catch (closeError) {
+          console.warn('Failed to close login check page:', closeError);
+        }
+      }
+      
+      // 뮤텍스 락 해제
+      this.loginCheckInProgress = false;
     }
   }
+
 
   async ensureLoggedIn(): Promise<boolean> {
     if (this.isLoggedIn) {
@@ -404,15 +456,19 @@ export class CafeMonitor {
     }
   }
 
-  async checkAllStreamers(): Promise<CafePost[]> {
+  async checkAllStreamers(silentMode: boolean = false): Promise<CafePost[]> {
     if (!await this.ensureLoggedIn()) {
-      console.log('Not logged in to Naver Cafe, skipping cafe monitoring');
+      if (!silentMode) {
+        console.log('Not logged in to Naver Cafe, skipping cafe monitoring');
+      }
       return [];
     }
 
     // robots.txt 준수 확인
     if (!await this.respectRobotsTxt()) {
-      console.log('robots.txt에 의해 카페 접근이 제한됨, 모니터링 중단');
+      if (!silentMode) {
+        console.log('robots.txt에 의해 카페 접근이 제한됨, 모니터링 중단');
+      }
       return [];
     }
 
@@ -420,15 +476,17 @@ export class CafeMonitor {
       const streamers = await this.databaseManager.getStreamers();
       const activeStreamers = streamers.filter(s => s.isActive && s.naverCafeUserId);
 
-      console.log(`Checking ${activeStreamers.length} cafe streamers...`);
+      if (!silentMode) {
+        console.log(`Checking ${activeStreamers.length} cafe streamers...`);
+      }
 
       const allPosts: CafePost[] = [];
 
       for (const streamer of activeStreamers) {
         try {
-          const posts = await this.checkStreamerPosts(streamer);
+          const posts = await this.checkStreamerPosts(streamer, silentMode);
           
-          if (posts.length > 0) {
+          if (posts.length > 0 && !silentMode) {
             console.log(`${streamer.name}: ${posts.length}개 새 게시물 발견, 알림 전송 시작...`);
             
             // 즉시 알림 전송
@@ -438,7 +496,8 @@ export class CafeMonitor {
                   streamer.name,
                   post.title,
                   post.url,
-                  streamer.profileImageUrl
+                  streamer.profileImageUrl,
+                  new Date(post.timestamp) // Pass the original post timestamp
                 );
                 await this.notificationService.sendNotification(notification);
                 console.log(`${streamer.name}: "${post.title}" 알림 전송 완료`);
@@ -457,7 +516,9 @@ export class CafeMonitor {
         }
       }
 
-      console.log(`Cafe check completed. New posts: ${allPosts.length}`);
+      if (!silentMode) {
+        console.log(`Cafe check completed. New posts: ${allPosts.length}`);
+      }
       
       return allPosts;
     } catch (error) {
@@ -466,7 +527,7 @@ export class CafeMonitor {
     }
   }
 
-  private async checkStreamerPosts(streamer: StreamerData): Promise<CafePost[]> {
+  private async checkStreamerPosts(streamer: StreamerData, silentMode: boolean = false): Promise<CafePost[]> {
     if (!streamer.naverCafeUserId || !this.page) {
       console.log(`${streamer.name}: 카페 사용자 ID 또는 페이지가 없습니다.`);
       return [];
@@ -528,16 +589,19 @@ export class CafeMonitor {
       for (const post of posts.posts) {
         if (!post.id) continue;
 
-        // 새 게시물인지 확인
-        const isNewPost = !lastPostId || parseInt(post.id) > parseInt(lastPostId);
+        // 새 게시물인지 확인 (숫자 비교)
+        const isNewPost = !lastPostId || this.compareCafePostIds(post.id, lastPostId) > 0;
         
         if (isNewPost) {
+          const originalTimestamp = this.parseCafeDate(post.date);
+          console.log(`${streamer.name}: 게시물 "${post.title}" - 원본 시간: ${post.date} → 파싱된 시간: ${originalTimestamp.toISOString()}`);
+          
           newPosts.push({
             id: post.id,
             title: post.title,
             url: post.url,
             author: streamer.name,
-            timestamp: this.parseDate(post.date)
+            timestamp: originalTimestamp.toISOString()
           });
         }
       }
@@ -604,8 +668,8 @@ export class CafeMonitor {
     const lastPostId = lastState?.lastContentId;
 
     for (const post of posts) {
-      // 이미 처리된 게시물인지 확인
-      if (lastPostId && parseInt(post.id) <= parseInt(lastPostId)) {
+      // 이미 처리된 게시물인지 확인 (숫자 비교)
+      if (lastPostId && this.compareCafePostIds(post.id, lastPostId) <= 0) {
         continue;
       }
 
@@ -613,7 +677,8 @@ export class CafeMonitor {
         streamer.name,
         post.title,
         post.url,
-        streamer.profileImageUrl
+        streamer.profileImageUrl,
+        new Date(post.timestamp) // Pass the original post timestamp
       );
 
       await this.notificationService.sendNotification(notification);
@@ -675,6 +740,16 @@ export class CafeMonitor {
     await this.delay(totalDelay);
   }
 
+  // 특정 스트리머의 카페 글만 조용히 체크 (baseline 설정용)
+  async checkSingleStreamerPosts(streamer: StreamerData): Promise<CafePost[]> {
+    try {
+      return await this.checkStreamerPosts(streamer, true); // silent mode
+    } catch (error) {
+      console.error(`Failed to check cafe posts for ${streamer.name}:`, error);
+      return [];
+    }
+  }
+
   // 사용자 ID 검증
   async validateUserId(userId: string, cafeClubId: string): Promise<{ valid: boolean; error?: string }> {
     try {
@@ -707,6 +782,33 @@ export class CafeMonitor {
   clearMemoryCache(): void {
     this.lastPostIds.clear();
     console.log('카페 모니터링 메모리 캐시 초기화 완료');
+  }
+
+  // 카페 게시물 ID 숫자 비교 (오류 처리 포함)
+  private compareCafePostIds(id1: string, id2: string): number {
+    try {
+      const num1 = parseInt(id1, 10);
+      const num2 = parseInt(id2, 10);
+      
+      // 숫자 변환 검증
+      if (isNaN(num1) || isNaN(num2)) {
+        console.warn(`Invalid cafe post ID comparison: ${id1} vs ${id2}, falling back to string comparison`);
+        // 숫자 변환 실패 시 문자열 비교로 폴백
+        if (id1 > id2) return 1;
+        if (id1 < id2) return -1;
+        return 0;
+      }
+      
+      if (num1 > num2) return 1;
+      if (num1 < num2) return -1;
+      return 0;
+    } catch (error) {
+      console.error('Failed to compare cafe post IDs:', error);
+      // 오류 시 문자열 비교로 폴백
+      if (id1 > id2) return 1;
+      if (id1 < id2) return -1;
+      return 0;
+    }
   }
 
   // 정리 작업

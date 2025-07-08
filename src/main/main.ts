@@ -250,6 +250,10 @@ class StreamerAlarmApp {
       return await this.databaseManager.getNotifications(options);
     });
 
+    ipcMain.handle('get-total-notification-count', async (_, options) => {
+      return await this.databaseManager.getTotalNotificationCount(options);
+    });
+
     ipcMain.handle('delete-all-notifications', async () => {
       await this.databaseManager.deleteAllNotifications();
       

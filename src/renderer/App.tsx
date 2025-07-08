@@ -111,6 +111,17 @@ const App: React.FC = () => {
     }
   };
 
+  const getTotalNotificationCount = async (): Promise<number> => {
+    try {
+      if (window.electronAPI?.getTotalNotificationCount) {
+        return await window.electronAPI.getTotalNotificationCount({});
+      }
+    } catch (error) {
+      console.error('Failed to get total notification count:', error);
+    }
+    return 0;
+  };
+
   const updateStats = async (streamersData: StreamerData[], notificationsData: NotificationRecord[]) => {
     // 읽지않은 알림 수 가져오기
     let unreadCount = 0;
@@ -150,7 +161,7 @@ const App: React.FC = () => {
       totalStreamers: streamersData.length,
       activeStreamers: streamersData.filter(s => s.isActive).length,
       liveStreamers: liveStreamers,
-      totalNotifications: notificationsData.length,
+      totalNotifications: await getTotalNotificationCount(),
       unreadNotifications: unreadCount,
       isMonitoring: isMonitoring
     });
@@ -285,6 +296,7 @@ const App: React.FC = () => {
               <div className="h-full">
                 <StreamerManagement 
                   streamers={streamers}
+                  liveStreamersCount={stats.liveStreamers}
                   onAdd={handleAddStreamer}
                   onUpdate={handleUpdateStreamer}
                   onDelete={handleDeleteStreamer}

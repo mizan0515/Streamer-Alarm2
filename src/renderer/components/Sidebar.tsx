@@ -240,14 +240,14 @@ const Sidebar: React.FC<SidebarProps> = ({ stats, onNaverActionStart, onNaverAct
         </div>
         <button
           onClick={handleNaverAction}
-          className={`w-full btn btn-sm text-xs ${
+          className={`w-full text-xs ${
             settings.needNaverLogin !== false 
-              ? 'btn-warning' 
-              : 'btn-danger'
+              ? 'btn btn-warning btn-sm' 
+              : 'btn-subtle'
           }`}
           title={settings.needNaverLogin !== false ? "네이버 로그인 필요" : "네이버 로그아웃"}
         >
-          {settings.needNaverLogin !== false ? '🔐 네이버 로그인' : '🚪 네이버 로그아웃'}
+          {settings.needNaverLogin !== false ? '🔐 네이버 로그인' : '🚪 로그아웃'}
         </button>
       </div>
 

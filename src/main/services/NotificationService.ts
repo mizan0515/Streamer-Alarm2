@@ -13,6 +13,7 @@ export class NotificationService {
   private databaseManager: DatabaseManager;
   private settingsService: SettingsService;
   private tempDir: string;
+  private activeHandlers: Map<string, { click: (...args: any[]) => void; action: (...args: any[]) => void }> = new Map();
 
   constructor(databaseManager: DatabaseManager) {
     this.databaseManager = databaseManager;
@@ -54,44 +55,24 @@ export class NotificationService {
         message = data.content;
       }
 
-      // 클릭 이벤트 핸들러를 Promise 외부에서 설정
-      const clickHandler = async (notifierObject: any, options: any, event: any) => {
-        console.log('Notification clicked:', event, options);
-        
-        // 알림을 읽음 처리
-        await this.markNotificationAsReadByUniqueKey(data.uniqueKey);
-        
-        if (data.url) {
-          console.log('Opening URL from notification click:', data.url);
-          shell.openExternal(data.url).catch((error) => {
-            console.error('Failed to open URL:', error);
-          });
-        }
-        // 이벤트 리스너 정리
-        notifier.removeListener('click', clickHandler);
-        notifier.removeListener('action', actionHandler);
-      };
+      // 이전 핸들러 정리 (같은 uniqueKey의 중복 방지)
+      this.cleanupHandlersForNotification(data.uniqueKey);
 
-      const actionHandler = async (notifierObject: any, options: any, event: any) => {
-        console.log('Notification action clicked:', event, options);
-        // Windows 토스트 알림에서 '열기' 버튼을 클릭한 경우
-        if (event === '열기' && data.url) {
-          // 알림을 읽음 처리
-          await this.markNotificationAsReadByUniqueKey(data.uniqueKey);
-          
-          console.log('Opening URL from action button:', data.url);
-          shell.openExternal(data.url).catch((error) => {
-            console.error('Failed to open URL from action:', error);
-          });
-        }
-        // 이벤트 리스너 정리
-        notifier.removeListener('click', clickHandler);
-        notifier.removeListener('action', actionHandler);
-      };
+      // 고유한 클릭 핸들러 생성
+      const clickHandler = this.createClickHandler(data);
+      const actionHandler = this.createActionHandler(data);
+
+      // 핸들러를 맵에 저장하여 추후 정리 가능하도록 함
+      this.activeHandlers.set(data.uniqueKey, { click: clickHandler, action: actionHandler });
 
       // 이벤트 리스너 등록
       notifier.on('click', clickHandler);
       notifier.on('action', actionHandler);
+
+      // 자동 정리 타이머 (30초 후)
+      setTimeout(() => {
+        this.cleanupHandlersForNotification(data.uniqueKey);
+      }, 30000);
 
       // Windows 토스트 알림 발송
       const result = await new Promise<boolean>((resolve) => {
@@ -215,7 +196,7 @@ export class NotificationService {
         isRead: false
       };
 
-      await this.databaseManager.addNotification(record);
+      await this.databaseManager.addNotification(record, data.originalTimestamp);
     } catch (error) {
       console.error('Failed to save notification record:', error);
     }
@@ -243,7 +224,8 @@ export class NotificationService {
     streamerName: string,
     postTitle: string,
     url: string,
-    profileImageUrl?: string
+    profileImageUrl?: string,
+    originalTimestamp?: Date
   ): NotificationData {
     return {
       type: 'cafe',
@@ -252,7 +234,8 @@ export class NotificationService {
       content: postTitle,
       url,
       profileImageUrl,
-      uniqueKey: `cafe_${streamerName}_${this.extractPostId(url)}`
+      uniqueKey: `cafe_${streamerName}_${this.extractPostId(url)}`,
+      originalTimestamp
     };
   }
 
@@ -260,7 +243,8 @@ export class NotificationService {
     streamerName: string,
     tweetContent: string,
     url: string,
-    profileImageUrl?: string
+    profileImageUrl?: string,
+    originalTimestamp?: Date
   ): NotificationData {
     return {
       type: 'twitter',
@@ -269,7 +253,8 @@ export class NotificationService {
       content: tweetContent,
       url,
       profileImageUrl,
-      uniqueKey: `twitter_${streamerName}_${this.extractTweetId(url)}`
+      uniqueKey: `twitter_${streamerName}_${this.extractTweetId(url)}`,
+      originalTimestamp
     };
   }
 
@@ -320,6 +305,94 @@ export class NotificationService {
       }
     } catch (error) {
       console.error('Failed to mark notification as read:', error);
+    }
+  }
+
+  // 클릭 핸들러 생성 (각 알림별로 고유)
+  private createClickHandler(data: NotificationData): (...args: any[]) => void {
+    return async (notifierObject: any, options: any, event: any) => {
+      try {
+        // 특정 알림만 처리 (ID로 확인)
+        if (options && options.id !== data.uniqueKey) {
+          return; // 다른 알림의 클릭 이벤트는 무시
+        }
+
+        console.log(`Notification clicked: ${data.uniqueKey}`);
+        
+        // 알림을 읽음 처리
+        await this.markNotificationAsReadByUniqueKey(data.uniqueKey);
+        
+        if (data.url) {
+          console.log(`Opening URL for ${data.uniqueKey}: ${data.url}`);
+          await shell.openExternal(data.url);
+        }
+        
+        // 핸들러 정리
+        this.cleanupHandlersForNotification(data.uniqueKey);
+      } catch (error) {
+        console.error(`Failed to handle click for ${data.uniqueKey}:`, error);
+      }
+    };
+  }
+
+  // 액션 핸들러 생성 (각 알림별로 고유)
+  private createActionHandler(data: NotificationData): (...args: any[]) => void {
+    return async (notifierObject: any, options: any, event: any) => {
+      try {
+        // 특정 알림만 처리 (ID로 확인)
+        if (options && options.id !== data.uniqueKey) {
+          return; // 다른 알림의 액션 이벤트는 무시
+        }
+
+        console.log(`Notification action clicked: ${data.uniqueKey}, event: ${event}`);
+        
+        // Windows 토스트 알림에서 '열기' 버튼을 클릭한 경우
+        if (event === '열기' && data.url) {
+          // 알림을 읽음 처리
+          await this.markNotificationAsReadByUniqueKey(data.uniqueKey);
+          
+          console.log(`Opening URL from action for ${data.uniqueKey}: ${data.url}`);
+          await shell.openExternal(data.url);
+        }
+        
+        // 핸들러 정리
+        this.cleanupHandlersForNotification(data.uniqueKey);
+      } catch (error) {
+        console.error(`Failed to handle action for ${data.uniqueKey}:`, error);
+      }
+    };
+  }
+
+  // 특정 알림의 핸들러 정리
+  private cleanupHandlersForNotification(uniqueKey: string): void {
+    try {
+      const handlers = this.activeHandlers.get(uniqueKey);
+      if (handlers) {
+        // 이벤트 리스너 제거
+        notifier.removeListener('click', handlers.click);
+        notifier.removeListener('action', handlers.action);
+        
+        // 맵에서 제거
+        this.activeHandlers.delete(uniqueKey);
+        
+        console.log(`Cleaned up handlers for notification: ${uniqueKey}`);
+      }
+    } catch (error) {
+      console.error(`Failed to cleanup handlers for ${uniqueKey}:`, error);
+    }
+  }
+
+  // 모든 활성 핸들러 정리 (앱 종료 시 사용)
+  public cleanupAllHandlers(): void {
+    try {
+      for (const [uniqueKey, handlers] of this.activeHandlers.entries()) {
+        notifier.removeListener('click', handlers.click);
+        notifier.removeListener('action', handlers.action);
+      }
+      this.activeHandlers.clear();
+      console.log('All notification handlers cleaned up');
+    } catch (error) {
+      console.error('Failed to cleanup all handlers:', error);
     }
   }
 

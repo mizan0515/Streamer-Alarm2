@@ -54,12 +54,14 @@ export class TwitterMonitor {
     });
   }
 
-  async checkAllStreamers(): Promise<TwitterTweet[]> {
+  async checkAllStreamers(silentMode: boolean = false): Promise<TwitterTweet[]> {
     try {
       const streamers = await this.databaseManager.getStreamers();
       const activeStreamers = streamers.filter(s => s.isActive && s.twitterUsername);
 
-      console.log(`Checking ${activeStreamers.length} Twitter streamers...`);
+      if (!silentMode) {
+        console.log(`Checking ${activeStreamers.length} Twitter streamers...`);
+      }
 
       const allTweets: TwitterTweet[] = [];
       
@@ -69,8 +71,10 @@ export class TwitterMonitor {
           const tweets = await this.checkStreamerTweets(streamer);
           allTweets.push(...tweets);
           
-          // 새 트윗 알림 처리
-          await this.handleNewTweets(streamer, tweets);
+          // 새 트윗 알림 처리 (silent mode에서는 알림 비활성화)
+          if (!silentMode) {
+            await this.handleNewTweets(streamer, tweets);
+          }
           
           // 요청 간 딜레이 (API 부하 방지)
           await this.delay(1000);
@@ -79,7 +83,9 @@ export class TwitterMonitor {
         }
       }
 
-      console.log(`Twitter check completed. New tweets: ${allTweets.length}`);
+      if (!silentMode) {
+        console.log(`Twitter check completed. New tweets: ${allTweets.length}`);
+      }
       
       return allTweets;
     } catch (error) {
@@ -108,8 +114,8 @@ export class TwitterMonitor {
         const tweet = this.parseRSSItem(item, streamer.twitterUsername);
         if (!tweet) continue;
 
-        // 새 트윗인지 확인 (ID 기반)
-        if (!lastTweetId || tweet.id > lastTweetId) {
+        // 새 트윗인지 확인 (ID 기반 - 숫자 비교)
+        if (!lastTweetId || this.compareTwitterIds(tweet.id, lastTweetId) > 0) {
           tweets.push(tweet);
         }
       }
@@ -165,15 +171,38 @@ export class TwitterMonitor {
       // 실제 X.com URL로 변환
       const realUrl = `https://x.com/${username}/status/${tweetId}`;
 
+      // RSS pubDate 파싱 (안전한 방식)
+      const originalTimestamp = this.parseTwitterDate(item.pubDate);
+      console.log(`@${username}: 트윗 "${content.substring(0, 50)}..." - RSS 시간: ${item.pubDate} → 파싱된 시간: ${originalTimestamp.toISOString()}`);
+
       return {
         id: tweetId,
         content: content,
         url: realUrl,
-        timestamp: new Date(item.pubDate).toISOString()
+        timestamp: originalTimestamp.toISOString()
       };
     } catch (error) {
       console.error('Failed to parse RSS item:', error);
       return null;
+    }
+  }
+
+  // 트위터 RSS pubDate 파싱 함수
+  private parseTwitterDate(pubDate: string): Date {
+    try {
+      // RSS pubDate 형식: "Wed, 08 Jul 2025 07:30:00 +0000"
+      const parsedDate = new Date(pubDate);
+      
+      // 유효한 날짜인지 확인
+      if (isNaN(parsedDate.getTime())) {
+        console.warn(`Invalid Twitter pubDate: ${pubDate}, using current time`);
+        return new Date();
+      }
+
+      return parsedDate;
+    } catch (error) {
+      console.error(`Error parsing Twitter pubDate: ${pubDate}`, error);
+      return new Date(); // 백업으로 현재 시간 사용
     }
   }
 
@@ -208,8 +237,8 @@ export class TwitterMonitor {
     const lastTweetId = lastState?.lastContentId;
 
     for (const tweet of tweets) {
-      // 이미 처리된 트윗인지 확인
-      if (lastTweetId && tweet.id <= lastTweetId) {
+      // 이미 처리된 트윗인지 확인 (숫자 비교)
+      if (lastTweetId && this.compareTwitterIds(tweet.id, lastTweetId) <= 0) {
         continue;
       }
 
@@ -217,7 +246,8 @@ export class TwitterMonitor {
         streamer.name,
         tweet.content,
         tweet.url,
-        streamer.profileImageUrl
+        streamer.profileImageUrl,
+        new Date(tweet.timestamp) // Pass the original tweet timestamp
       );
 
       await this.notificationService.sendNotification(notification);
@@ -247,6 +277,16 @@ export class TwitterMonitor {
 
   private delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  // 특정 스트리머의 트윗만 조용히 체크 (baseline 설정용)
+  async checkSingleStreamerTweets(streamer: StreamerData): Promise<TwitterTweet[]> {
+    try {
+      return await this.checkStreamerTweets(streamer);
+    } catch (error) {
+      console.error(`Failed to check tweets for ${streamer.name}:`, error);
+      return [];
+    }
   }
 
   // 사용자명 검증
@@ -285,6 +325,25 @@ export class TwitterMonitor {
     }
     
     console.warn('All Nitter instances appear to be unhealthy');
+  }
+
+  // Twitter ID 숫자 비교 (BigInt 사용으로 정확한 비교)
+  private compareTwitterIds(id1: string, id2: string): number {
+    try {
+      // Twitter IDs are 64-bit integers, use BigInt for accurate comparison
+      const bigInt1 = BigInt(id1);
+      const bigInt2 = BigInt(id2);
+      
+      if (bigInt1 > bigInt2) return 1;
+      if (bigInt1 < bigInt2) return -1;
+      return 0;
+    } catch (error) {
+      console.error('Failed to compare Twitter IDs as numbers, falling back to string comparison:', error);
+      // Fallback to string comparison if BigInt conversion fails
+      if (id1 > id2) return 1;
+      if (id1 < id2) return -1;
+      return 0;
+    }
   }
 
   // 정리 작업
