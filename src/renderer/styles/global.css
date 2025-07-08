@@ -406,6 +406,135 @@
     -webkit-line-clamp: 3;
   }
 
+  /* 플로팅 스크롤 버튼 (맛있는 등장 애니메이션) */
+  .floating-scroll-btn {
+    position: fixed !important;
+    bottom: 2rem !important;
+    right: 2rem !important;
+    width: 3.5rem !important;
+    height: 3.5rem !important;
+    border-radius: 50% !important;
+    z-index: 9999 !important;
+    cursor: pointer;
+    overflow: hidden;
+    background: linear-gradient(135deg, 
+      rgba(147, 51, 234, 0.9), 
+      rgba(102, 126, 234, 0.9), 
+      rgba(59, 130, 246, 0.9)
+    );
+    backdrop-filter: blur(20px);
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 
+      0 8px 32px rgba(0, 0, 0, 0.3),
+      0 4px 20px rgba(147, 51, 234, 0.4),
+      0 0 0 0 rgba(147, 51, 234, 0.4);
+    animation: floatingEnter 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    display: block !important;
+  }
+
+  .floating-scroll-btn:hover {
+    transform: translateY(-2px) scale(1.05);
+    background: linear-gradient(135deg, rgba(147, 51, 234, 1), rgba(102, 126, 234, 1));
+    box-shadow: 
+      0 12px 40px rgba(0, 0, 0, 0.4),
+      0 0 0 8px rgba(147, 51, 234, 0.2);
+  }
+
+  .floating-scroll-btn:active {
+    transform: translateY(0) scale(0.98);
+    box-shadow: 
+      0 4px 16px rgba(0, 0, 0, 0.3),
+      0 0 0 0 rgba(147, 51, 234, 0.4);
+  }
+
+  .floating-scroll-btn.animating {
+    animation: floatingClick 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .floating-scroll-btn:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+    transform: none;
+  }
+
+  .floating-scroll-icon {
+    @apply w-full h-full flex items-center justify-center text-white font-bold text-lg relative z-10;
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .floating-scroll-btn:hover .floating-scroll-icon {
+    transform: scale(1.1);
+  }
+
+  .floating-scroll-ripple {
+    @apply absolute inset-0 rounded-full pointer-events-none;
+    background: radial-gradient(circle, rgba(255, 255, 255, 0.3) 0%, transparent 70%);
+    transform: scale(0);
+    opacity: 0;
+  }
+
+  .floating-scroll-btn:active .floating-scroll-ripple {
+    animation: rippleEffect 0.6s ease-out;
+  }
+
+  /* 네온 펄스 애니메이션 */
+  .neon-pulse {
+    animation: neonPulse 2s infinite;
+  }
+
+  /* 심플한 페이지네이션 */
+  .pagination-simple {
+    @apply flex items-center justify-center space-x-6 py-4;
+  }
+
+  .pagination-btn-simple {
+    @apply px-4 py-2 text-sm font-medium text-gray-400 hover:text-white transition-all duration-200 rounded-lg hover:bg-white/10;
+  }
+
+  .pagination-btn-simple:disabled {
+    @apply opacity-30 cursor-not-allowed hover:text-gray-400 hover:bg-transparent;
+  }
+
+  .pagination-info {
+    @apply text-center px-6;
+  }
+
+  .pagination-info-main {
+    @apply text-white text-sm font-medium;
+  }
+
+  .pagination-info-sub {
+    @apply text-gray-400 text-xs mt-1;
+  }
+
+  /* 미묘한 로그아웃 버튼 */
+  .btn-subtle {
+    @apply px-3 py-1.5 text-xs text-gray-500 hover:text-gray-300 rounded-lg transition-all duration-300;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(107, 114, 128, 0.2);
+    box-shadow: none;
+  }
+
+  .btn-subtle:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(107, 114, 128, 0.3);
+    box-shadow: 0 0 8px rgba(107, 114, 128, 0.2);
+  }
+
+  /* 새 알림 버튼 네온 효과 */
+  .new-notification-btn {
+    @apply btn btn-primary relative overflow-hidden;
+    animation: neonPulse 2s infinite;
+  }
+
+  .new-notification-btn::before {
+    content: '';
+    @apply absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent;
+    transform: translateX(-100%);
+    animation: shimmer 2s infinite;
+  }
+
   /* 키프레임 애니메이션 */
   @keyframes scaleUp {
     from {
@@ -415,6 +544,78 @@
     to {
       opacity: 1;
       transform: scale(1);
+    }
+  }
+
+  @keyframes neonPulse {
+    0%, 100% { 
+      box-shadow: 0 0 20px rgba(147, 51, 234, 0.4), 0 8px 25px rgba(102, 126, 234, 0.4);
+    }
+    50% { 
+      box-shadow: 0 0 30px rgba(147, 51, 234, 0.8), 0 8px 35px rgba(102, 126, 234, 0.6);
+    }
+  }
+
+  @keyframes shimmer {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+  }
+
+  /* 플로팅 스크롤 버튼 애니메이션 */
+  @keyframes floatingEnter {
+    0% {
+      opacity: 0;
+      transform: translateY(40px) scale(0.3) rotate(180deg);
+      filter: blur(10px);
+    }
+    20% {
+      opacity: 0.7;
+      transform: translateY(20px) scale(0.6) rotate(90deg);
+      filter: blur(5px);
+    }
+    60% {
+      opacity: 1;
+      transform: translateY(-8px) scale(1.15) rotate(-10deg);
+      filter: blur(0px);
+    }
+    80% {
+      transform: translateY(3px) scale(0.95) rotate(5deg);
+    }
+    100% {
+      opacity: 1;
+      transform: translateY(0) scale(1) rotate(0deg);
+      filter: blur(0px);
+    }
+  }
+
+  @keyframes floatingClick {
+    0% { transform: scale(1); }
+    15% { transform: scale(0.9) rotate(5deg); }
+    30% { transform: scale(1.05) rotate(-2deg); }
+    45% { transform: scale(0.95) rotate(1deg); }
+    60% { transform: scale(1.02) rotate(0deg); }
+    100% { transform: scale(1) rotate(0deg); }
+  }
+
+  @keyframes rippleEffect {
+    0% {
+      transform: scale(0);
+      opacity: 1;
+    }
+    100% {
+      transform: scale(2.5);
+      opacity: 0;
+    }
+  }
+
+  @keyframes floatingExit {
+    from {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+    to {
+      opacity: 0;
+      transform: translateY(20px) scale(0.5) rotate(-90deg);
     }
   }
 }

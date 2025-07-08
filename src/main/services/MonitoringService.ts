@@ -61,13 +61,16 @@ export class MonitoringService {
       await this.initializeLoginStatus();
       this.startLoginStatusMonitoring();
       
+      // 새 스트리머들의 기준선 설정 (무음 모드)
+      await this.establishBaselinesForNewStreamers();
+      
       console.log('Monitoring service started with state persistence');
       
-      // 첫 체크를 10초 후에 실행 (기준선 설정)
+      // 첫 체크를 15초 후에 실행 (기준선 설정 완료 후)
       setTimeout(async () => {
         await this.performMonitoringCheck();
         this.scheduleNextCheck();
-      }, 10000);
+      }, 15000);
       
       return true;
     } catch (error) {
@@ -97,6 +100,9 @@ export class MonitoringService {
       await this.cafeMonitor.cleanup();
       this.chzzkMonitor.cleanup();
       this.twitterMonitor.cleanup();
+      
+      // 알림 핸들러 정리
+      this.notificationService.cleanupAllHandlers();
       
       console.log('Monitoring service stopped');
       return true;
@@ -574,5 +580,152 @@ export class MonitoringService {
       console.error('Failed to check Naver login status:', error);
       return true; // 실패 시 로그인 필요한 것으로 처리
     }
+  }
+
+  // 새 스트리머들을 위한 기준선 설정 (무음 모드 - 알림 없이 현재 상태 저장)
+  private async establishBaselinesForNewStreamers(): Promise<void> {
+    try {
+      console.log('🔄 Establishing baselines for new streamers (silent mode)...');
+      
+      const streamersNeedingBaseline = await this.databaseManager.getStreamersNeedingBaseline();
+      
+      if (streamersNeedingBaseline.length === 0) {
+        console.log('✅ No streamers need baseline establishment');
+        return;
+      }
+      
+      console.log(`📊 Found ${streamersNeedingBaseline.length} streamer-platform combinations needing baseline`);
+      
+      // Group by platform for batch processing
+      const platformGroups = streamersNeedingBaseline.reduce((groups, item) => {
+        if (!groups[item.platform]) groups[item.platform] = [];
+        groups[item.platform].push(item);
+        return groups;
+      }, {} as Record<string, typeof streamersNeedingBaseline>);
+      
+      let baselineCount = 0;
+      
+      // Process each platform
+      for (const [platform, streamers] of Object.entries(platformGroups)) {
+        console.log(`🎯 Establishing baseline for ${streamers.length} streamers on ${platform}...`);
+        
+        for (const { streamerId, streamerName } of streamers) {
+          try {
+            await this.establishBaselineForPlatform(streamerId, streamerName, platform);
+            baselineCount++;
+            
+            // Brief delay between streamers to avoid overwhelming APIs
+            await this.delay(500);
+          } catch (error) {
+            console.error(`❌ Failed to establish baseline for ${streamerName} on ${platform}:`, error);
+          }
+        }
+      }
+      
+      console.log(`✅ Baseline establishment completed: ${baselineCount}/${streamersNeedingBaseline.length} successful`);
+    } catch (error) {
+      console.error('❌ Failed to establish baselines for new streamers:', error);
+    }
+  }
+
+  private async establishBaselineForPlatform(streamerId: number, streamerName: string, platform: string): Promise<void> {
+    try {
+      switch (platform) {
+        case 'chzzk':
+          await this.establishChzzkBaseline(streamerId, streamerName);
+          break;
+        case 'twitter':
+          await this.establishTwitterBaseline(streamerId, streamerName);
+          break;
+        case 'cafe':
+          await this.establishCafeBaseline(streamerId, streamerName);
+          break;
+        default:
+          console.warn(`Unknown platform: ${platform}`);
+      }
+    } catch (error) {
+      console.error(`Failed to establish ${platform} baseline for ${streamerName}:`, error);
+    }
+  }
+
+  private async establishChzzkBaseline(streamerId: number, streamerName: string): Promise<void> {
+    try {
+      const streamers = await this.databaseManager.getStreamers();
+      const streamer = streamers.find(s => s.id === streamerId);
+      
+      if (!streamer?.chzzkId) {
+        console.log(`${streamerName}: No CHZZK ID, skipping baseline`);
+        return;
+      }
+      
+      // Get current live status silently (without notifications) - only for this specific streamer
+      const currentStatus = await this.chzzkMonitor.checkSingleStreamerLive(streamer);
+      
+      if (currentStatus) {
+        const baselineValue = currentStatus.isLive ? currentStatus.url || 'live' : 'offline';
+        await this.databaseManager.establishBaselineForStreamer(streamerId, 'chzzk', baselineValue);
+        console.log(`📺 ${streamerName}: CHZZK baseline set (${currentStatus.isLive ? 'LIVE' : 'OFFLINE'})`);
+      }
+    } catch (error) {
+      console.error(`CHZZK baseline failed for ${streamerName}:`, error);
+    }
+  }
+
+  private async establishTwitterBaseline(streamerId: number, streamerName: string): Promise<void> {
+    try {
+      const streamers = await this.databaseManager.getStreamers();
+      const streamer = streamers.find(s => s.id === streamerId);
+      
+      if (!streamer?.twitterUsername) {
+        console.log(`${streamerName}: No Twitter username, skipping baseline`);
+        return;
+      }
+      
+      // Get latest tweet silently (without notifications) - only for this specific streamer
+      const tweets = await this.twitterMonitor.checkSingleStreamerTweets(streamer);
+      
+      if (tweets.length > 0) {
+        // Use the latest tweet ID as baseline
+        const latestTweet = tweets[tweets.length - 1];
+        await this.databaseManager.establishBaselineForStreamer(streamerId, 'twitter', latestTweet.id);
+        console.log(`🐦 ${streamerName}: Twitter baseline set (latest: ${latestTweet.id})`);
+      }
+    } catch (error) {
+      console.error(`Twitter baseline failed for ${streamerName}:`, error);
+    }
+  }
+
+  private async establishCafeBaseline(streamerId: number, streamerName: string): Promise<void> {
+    try {
+      const streamers = await this.databaseManager.getStreamers();
+      const streamer = streamers.find(s => s.id === streamerId);
+      
+      if (!streamer?.naverCafeUserId) {
+        console.log(`${streamerName}: No Cafe user ID, skipping baseline`);
+        return;
+      }
+      
+      // Check if logged in to Cafe
+      if (!await this.cafeMonitor.ensureLoggedIn()) {
+        console.log(`${streamerName}: Not logged into Cafe, skipping baseline`);
+        return;
+      }
+      
+      // Get latest cafe posts silently (without notifications) - only for this specific streamer
+      const posts = await this.cafeMonitor.checkSingleStreamerPosts(streamer);
+      
+      if (posts.length > 0) {
+        // Use the latest post ID as baseline
+        const latestPost = posts[posts.length - 1];
+        await this.databaseManager.establishBaselineForStreamer(streamerId, 'cafe', latestPost.id);
+        console.log(`💬 ${streamerName}: Cafe baseline set (latest: ${latestPost.id})`);
+      }
+    } catch (error) {
+      console.error(`Cafe baseline failed for ${streamerName}:`, error);
+    }
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 }

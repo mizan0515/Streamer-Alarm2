@@ -68,6 +68,7 @@ export interface NotificationData {
   url?: string;
   profileImageUrl?: string;
   uniqueKey: string;
+  originalTimestamp?: Date; // 원본 게시물 작성 시간
 }
 
 export interface CafePost {
@@ -100,7 +101,8 @@ export interface IpcEvents {
   'add-streamer': Omit<StreamerData, 'id' | 'createdAt' | 'updatedAt'>;
   'update-streamer': StreamerData;
   'delete-streamer': number;
-  'get-notifications': { limit?: number; type?: string };
+  'get-notifications': { limit?: number; type?: string; offset?: number };
+  'get-total-notification-count': { type?: string };
   'delete-all-notifications': void;
   'mark-notification-read': number;
   'mark-all-notifications-read': void;

@@ -5,6 +5,7 @@ import AddStreamerForm from '../components/AddStreamerForm';
 
 interface StreamerManagementProps {
   streamers: StreamerData[];
+  liveStreamersCount: number;
   onAdd: (streamerData: Omit<StreamerData, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>;
   onUpdate: (streamerData: StreamerData) => Promise<void>;
   onDelete: (streamerId: number) => Promise<void>;
@@ -12,6 +13,7 @@ interface StreamerManagementProps {
 
 const StreamerManagement: React.FC<StreamerManagementProps> = ({
   streamers,
+  liveStreamersCount,
   onAdd,
   onUpdate,
   onDelete
@@ -122,7 +124,7 @@ const StreamerManagement: React.FC<StreamerManagementProps> = ({
                     <div className="flex items-center justify-between">
                       <div>
                         <p className="text-sm font-medium text-gray-400">현재 라이브</p>
-                        <p className="text-3xl font-bold text-red-400 mt-1">0</p>
+                        <p className="text-3xl font-bold text-red-400 mt-1">{liveStreamersCount}</p>
                       </div>
                       <div className="text-3xl">🔴</div>
                     </div>

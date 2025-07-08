@@ -67,12 +67,14 @@ export class ChzzkMonitor {
     });
   }
 
-  async checkAllStreamers(): Promise<LiveStatus[]> {
+  async checkAllStreamers(silentMode: boolean = false): Promise<LiveStatus[]> {
     try {
       const streamers = await this.databaseManager.getStreamers();
       const activeStreamers = streamers.filter(s => s.isActive && s.chzzkId);
 
-      console.log(`Checking ${activeStreamers.length} CHZZK streamers...`);
+      if (!silentMode) {
+        console.log(`Checking ${activeStreamers.length} CHZZK streamers...`);
+      }
 
       const liveStatuses: LiveStatus[] = [];
       
@@ -82,8 +84,10 @@ export class ChzzkMonitor {
           const liveStatus = await this.checkStreamerLive(streamer);
           liveStatuses.push(liveStatus);
           
-          // 상태 변화 감지 및 알림 발송
-          await this.handleStatusChange(streamer, liveStatus);
+          // 상태 변화 감지 및 알림 발송 (silent mode에서는 알림 비활성화)
+          if (!silentMode) {
+            await this.handleStatusChange(streamer, liveStatus);
+          }
           
           return liveStatus;
         } catch (error) {
@@ -251,6 +255,16 @@ export class ChzzkMonitor {
     } catch (error) {
       console.error(`Failed to validate channel ${chzzkId}:`, error);
       return { valid: false };
+    }
+  }
+
+  // 특정 스트리머의 라이브 상태만 조용히 체크 (baseline 설정용)
+  async checkSingleStreamerLive(streamer: StreamerData): Promise<LiveStatus | null> {
+    try {
+      return await this.checkStreamerLive(streamer);
+    } catch (error) {
+      console.error(`Failed to check live status for ${streamer.name}:`, error);
+      return null;
     }
   }
 

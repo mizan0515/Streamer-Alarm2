@@ -345,7 +345,7 @@ export class DatabaseManager {
   }
 
   // 알림 관련 메서드
-  async getNotifications(options: { limit?: number; type?: string } = {}): Promise<NotificationRecord[]> {
+  async getNotifications(options: { limit?: number; type?: string; offset?: number } = {}): Promise<NotificationRecord[]> {
     let query = `
       SELECT n.id,
              n.streamer_id as streamerId,
@@ -374,6 +374,11 @@ export class DatabaseManager {
     if (options.limit) {
       query += ' LIMIT ?';
       params.push(options.limit);
+      
+      if (options.offset) {
+        query += ' OFFSET ?';
+        params.push(options.offset);
+      }
     }
 
     const stmt = this.db.prepare(query);
@@ -404,11 +409,14 @@ export class DatabaseManager {
     }));
   }
 
-  async addNotification(notification: Omit<NotificationRecord, 'id' | 'createdAt'>): Promise<void> {
+  async addNotification(notification: Omit<NotificationRecord, 'id' | 'createdAt'>, originalTimestamp?: Date): Promise<void> {
+    // 원본 시간이 제공되면 사용, 아니면 현재 시간 사용
+    const timestamp = originalTimestamp ? originalTimestamp.toISOString() : new Date().toISOString();
+    
     const insertNotification = this.db.prepare(`
       INSERT OR IGNORE INTO notifications (
-        streamer_id, type, title, content, url, unique_key, profile_image_url, is_read
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        streamer_id, type, title, content, url, unique_key, profile_image_url, is_read, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     insertNotification.run(
@@ -419,7 +427,8 @@ export class DatabaseManager {
       notification.url,
       notification.uniqueKey,
       notification.profileImageUrl || null,
-      notification.isRead ? 1 : 0
+      notification.isRead ? 1 : 0,
+      timestamp
     );
 
     // 오래된 알림 삭제 (최대 1000개 유지)
@@ -452,6 +461,21 @@ export class DatabaseManager {
   async getUnreadNotificationCount(): Promise<number> {
     const stmt = this.db.prepare('SELECT COUNT(*) as count FROM notifications WHERE is_read = 0');
     const result = stmt.get() as { count: number };
+    return result.count;
+  }
+
+  // 총 알림 수 조회 (페이지네이션용)
+  async getTotalNotificationCount(options: { type?: string } = {}): Promise<number> {
+    let query = 'SELECT COUNT(*) as count FROM notifications n';
+    const params: any[] = [];
+
+    if (options.type && options.type !== 'all') {
+      query += ' WHERE n.type = ?';
+      params.push(options.type);
+    }
+
+    const stmt = this.db.prepare(query);
+    const result = stmt.get(...params) as { count: number };
     return result.count;
   }
 
@@ -626,6 +650,41 @@ export class DatabaseManager {
     });
     
     console.log(`Initialized monitor states for ${streamers.length} streamers across ${platforms.length} platforms`);
+  }
+
+  // Silent baseline establishment for new streamers to prevent mass notifications
+  async establishBaselineForStreamer(streamerId: number, platform: string, contentId: string): Promise<void> {
+    const updateState = this.db.prepare(`
+      UPDATE monitor_states 
+      SET last_content_id = ?, last_check_time = CURRENT_TIMESTAMP, last_status = 'baseline'
+      WHERE streamer_id = ? AND platform = ?
+    `);
+    
+    updateState.run(contentId, streamerId, platform);
+    console.log(`Established baseline for streamer ${streamerId} on ${platform}: ${contentId}`);
+  }
+
+  // Check if a streamer needs baseline establishment (has null last_content_id)
+  async needsBaselineEstablishment(streamerId: number, platform: string): Promise<boolean> {
+    const checkState = this.db.prepare(`
+      SELECT last_content_id FROM monitor_states 
+      WHERE streamer_id = ? AND platform = ?
+    `);
+    
+    const result = checkState.get(streamerId, platform) as { last_content_id: string | null } | undefined;
+    return !result || result.last_content_id === null;
+  }
+
+  // Get all streamers that need baseline establishment
+  async getStreamersNeedingBaseline(): Promise<{ streamerId: number, platform: string, streamerName: string }[]> {
+    const query = this.db.prepare(`
+      SELECT s.id as streamerId, ms.platform, s.name as streamerName
+      FROM streamers s
+      JOIN monitor_states ms ON s.id = ms.streamer_id
+      WHERE s.is_active = 1 AND ms.last_content_id IS NULL
+    `);
+    
+    return query.all() as { streamerId: number, platform: string, streamerName: string }[];
   }
 
   // 데이터베이스 정리
