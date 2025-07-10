@@ -75,7 +75,7 @@
 #### 🛠️ 개발자용
 ```bash
 # 1. 저장소 클론
-git clone https://github.com/your-username/streamer-alarm2.git
+git clone https://github.com/mizan0515/streamer-alarm2.git
 cd streamer-alarm2
 
 # 2. 의존성 설치 (Playwright 브라우저 자동 포함)
