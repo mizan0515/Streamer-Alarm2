@@ -58,7 +58,7 @@
 
 ### 알림 & 시스템
 - **node-notifier** - Windows 토스트 알림
-- **Canvas** - 동적 시스템 트레이 아이콘
+- **Native Buffer API** - 동적 시스템 트레이 아이콘
 - **IPC Context Bridge** - 안전한 프로세스 간 통신
 
 ---
@@ -73,6 +73,12 @@
 3. 앱 실행 → 즉시 사용 가능 ✅
 
 #### 🛠️ 개발자용
+
+**시스템 요구사항**
+- Node.js 18.0.0 이상
+- npm 8.0.0 이상
+- Git
+
 ```bash
 # 1. 저장소 클론
 git clone https://github.com/mizan0515/streamer-alarm2.git
@@ -81,7 +87,10 @@ cd streamer-alarm2
 # 2. 의존성 설치 (Playwright 브라우저 자동 포함)
 npm install
 
-# 3. 개발 서버 시작
+# 3. Playwright 브라우저 설치 (필요시)
+npx playwright install chromium
+
+# 4. 개발 서버 시작
 npm run dev
 ```
 
@@ -101,24 +110,52 @@ npx eslint src/
 ### 📦 프로덕션 빌드
 
 ```bash
-# 1. 프로덕션 빌드
+# 1. 프로덕션 빌드 (TypeScript → JavaScript)
 npm run build
 
 # 2. 앱 실행 (빌드 후)
 npm start
 
-# 3. 배포용 패키징
+# 3. 개발용 패키징 (빠른 테스트)
+npm run pack
+
+# 4. 배포용 패키징 (인스톨러 생성)
 npm run dist
 ```
 
 ### 📁 빌드 결과물
 
+**Windows**
 ```
 release/
 ├── win-unpacked/
 │   └── Streamer Alarm System.exe    # 개발용 실행 파일
 └── Streamer Alarm System Setup 2.0.0.exe  # 설치 프로그램
 ```
+
+**Linux**
+```
+release/
+├── linux-unpacked/
+│   └── streamer-alarm-system        # 개발용 실행 파일
+└── streamer-alarm-system-2.0.0.AppImage   # 설치 프로그램
+```
+
+**macOS**
+```
+release/
+├── mac/
+│   └── Streamer Alarm System.app    # 개발용 앱 번들
+└── Streamer Alarm System-2.0.0.dmg  # 설치 프로그램
+```
+
+#### 🚀 빌드 명령어 요약
+
+| 명령어 | 용도 | 결과물 | 실행 방법 |
+|--------|------|---------|-----------|
+| `npm run build` | TypeScript 컴파일 | `dist/` 폴더 | `npm start` |
+| `npm run pack` | 개발용 패키징 | `release/[platform]-unpacked/` | 직접 실행 |
+| `npm run dist` | 배포용 패키징 | 설치 프로그램 | 설치 후 실행 |
 
 ---
 
@@ -349,8 +386,25 @@ streamer-alarm2/
 
 ### 💾 런타임 데이터
 
+**Windows**
 ```
 %USERPROFILE%/AppData/Roaming/Streamer Alarm System/
+├── streamer-alarm.db          # SQLite 데이터베이스
+├── logs/                      # 로그 파일
+└── cafe_browser_data/         # Playwright 브라우저 데이터
+```
+
+**Linux**
+```
+~/.config/Streamer Alarm System/
+├── streamer-alarm.db          # SQLite 데이터베이스
+├── logs/                      # 로그 파일
+└── cafe_browser_data/         # Playwright 브라우저 데이터
+```
+
+**macOS**
+```
+~/Library/Application Support/Streamer Alarm System/
 ├── streamer-alarm.db          # SQLite 데이터베이스
 ├── logs/                      # 로그 파일
 └── cafe_browser_data/         # Playwright 브라우저 데이터
@@ -366,12 +420,15 @@ streamer-alarm2/
 # Node.js 18+ 필수
 node --version  # v18.0.0+
 
-# 개발 의존성 확인
-npm run dev:check
+# 의존성 설치
+npm install
 
 # 개발용 빌드 (감시 모드)
 npm run dev:main    # 메인 프로세스
 npm run dev:renderer # 렌더러 프로세스
+
+# 또는 동시 실행
+npm run dev         # 메인 + 렌더러 동시 실행
 ```
 
 ### 🧪 테스트
@@ -389,15 +446,65 @@ npx eslint src/ --ext .ts,.tsx
 
 ### 📦 배포 빌드
 
+**공통 (모든 플랫폼)**
 ```bash
-# 프로덕션 빌드
+# 1. 프로덕션 빌드 (TypeScript 컴파일)
 npm run build
 
-# Windows 인스톨러 생성  
-npm run dist
-
-# 개발용 패키징 (빠른 테스트)
+# 2. 개발용 패키징 (빠른 테스트용)
 npm run pack
+
+# 3. 배포용 인스톨러 생성
+npm run dist
+```
+
+**빌드 결과물**
+- Windows: `release/win-unpacked/Streamer Alarm System.exe`
+- Linux: `release/linux-unpacked/streamer-alarm-system`
+- macOS: `release/mac/Streamer Alarm System.app`
+
+#### 🔧 개발자용 완전 재빌드
+
+**Windows (PowerShell)**
+```powershell
+# 1. 앱 종료 (실행 중인 경우)
+taskkill /f /im "Streamer Alarm System.exe"
+
+# 2. 캐시 정리
+Remove-Item -Recurse -Force dist, release -ErrorAction SilentlyContinue
+
+# 3. 네이티브 모듈 재빌드 (필요시)
+npx electron-rebuild
+
+# 4. 전체 빌드
+npm run build
+
+# 5. 패키징 및 실행
+npm run pack
+cd "release\win-unpacked"
+& ".\Streamer Alarm System.exe"
+```
+
+**Linux/macOS (Bash)**
+```bash
+# 1. 앱 종료 (실행 중인 경우)
+pkill -f "Streamer Alarm System" || true
+
+# 2. 캐시 정리
+rm -rf dist release
+
+# 3. 네이티브 모듈 재빌드 (필요시)
+npx electron-rebuild
+
+# 4. 전체 빌드
+npm run build
+
+# 5. 패키징 및 실행
+npm run pack
+# Linux
+cd "release/linux-unpacked" && ./streamer-alarm-system
+# macOS
+open "release/mac/Streamer Alarm System.app"
 ```
 
 ---
@@ -441,29 +548,53 @@ npm run pack
 ### 🐛 고급 문제 해결
 
 #### 📊 로그 확인
-1. **앱 로그 위치**
-   ```
-   %USERPROFILE%/AppData/Roaming/Streamer Alarm System/logs/
-   ```
-2. **개발자 도구**
-   - 개발 모드에서 F12 → 콘솔 탭
+
+**Windows**
+```
+%USERPROFILE%/AppData/Roaming/Streamer Alarm System/logs/
+```
+
+**Linux**
+```
+~/.config/Streamer Alarm System/logs/
+```
+
+**macOS**
+```
+~/Library/Application Support/Streamer Alarm System/logs/
+```
+
+**개발자 도구**
+- 개발 모드에서 F12 → 콘솔 탭
 
 #### 🗄️ 데이터베이스 직접 확인
-1. **SQLite 브라우저 설치**
-   - [DB Browser for SQLite](https://sqlitebrowser.org/) 다운로드
-2. **DB 파일 열기**
-   ```
-   %USERPROFILE%/AppData/Roaming/Streamer Alarm System/streamer-alarm.db
-   ```
+
+**SQLite 브라우저 설치**
+- [DB Browser for SQLite](https://sqlitebrowser.org/) 다운로드
+
+**DB 파일 열기**
+
+Windows: `%USERPROFILE%/AppData/Roaming/Streamer Alarm System/streamer-alarm.db`
+Linux: `~/.config/Streamer Alarm System/streamer-alarm.db`
+macOS: `~/Library/Application Support/Streamer Alarm System/streamer-alarm.db`
 
 #### 🔄 완전 초기화
-1. **앱 데이터 삭제**
-   ```bash
-   # 앱 종료 후 실행
-   rmdir /s "%USERPROFILE%/AppData/Roaming/Streamer Alarm System"
-   ```
-2. **앱 재설치**
-   - 기존 설치 프로그램으로 재설치
+
+**Windows (PowerShell)**
+```powershell
+# 앱 종료 후 실행
+Remove-Item -Recurse -Force "$env:APPDATA\Streamer Alarm System" -ErrorAction SilentlyContinue
+```
+
+**Linux/macOS (Bash)**
+```bash
+# 앱 종료 후 실행
+rm -rf ~/.config/Streamer\ Alarm\ System
+rm -rf ~/Library/Application\ Support/Streamer\ Alarm\ System  # macOS
+```
+
+**앱 재설치**
+- 기존 설치 프로그램으로 재설치
 
 ---
 

@@ -164,15 +164,39 @@ export class ChzzkMonitor {
     const previousState = await this.databaseManager.getMonitorState(streamer.id, 'chzzk');
     const previousStatus = previousState?.lastStatus === 'live';
     
+    // 🚨 NEW: 새 스트리머 초기화 처리 (초기 라이브 상태 알림 차단)
+    const isNewStreamer = !previousState;
+    if (isNewStreamer) {
+      console.log(`🆕 ${streamer.name}: 새 스트리머 감지됨 - 초기 라이브 상태 알림 차단`);
+      
+      // 현재 상태를 데이터베이스에 저장 (초기화 상태로)
+      await this.databaseManager.setMonitorState(
+        streamer.id,
+        'chzzk',
+        currentStatus.isLive ? (currentStatus.url || '') : undefined,
+        currentStatus.isLive ? 'live' : 'offline'
+      );
+      
+      // 메모리 캐시도 업데이트
+      this.previousLiveStatus.set(streamer.id.toString(), currentStatus.isLive);
+      
+      console.log(`🆕 ${streamer.name}: 초기 라이브 상태 "${currentStatus.isLive ? 'live' : 'offline'}" 설정 완료`);
+      return; // 새 스트리머는 알림 전송 안함
+    }
+    
     // 상태가 변경되었고, 라이브가 시작된 경우에만 알림 발송
     if (!previousStatus && currentStatus.isLive) {
-      // 스트리머별 알림 설정 확인
-      if (streamer.notifications?.chzzk) {
+      // 최신 스트리머 정보 다시 조회 (알림 설정 동기화)
+      const latestStreamers = await this.databaseManager.getStreamers();
+      const latestStreamer = latestStreamers.find(s => s.id === streamer.id);
+      
+      // 스트리머별 알림 설정 확인 (최신 정보 기준)
+      if (latestStreamer?.notifications?.chzzk && latestStreamer.isActive) {
         const notification = this.notificationService.createLiveNotification(
-          streamer.name,
+          latestStreamer.name,
           currentStatus.title || '라이브 스트리밍',
-          currentStatus.url || `https://chzzk.naver.com/${streamer.chzzkId}`,
-          streamer.profileImageUrl
+          currentStatus.url || `https://chzzk.naver.com/${latestStreamer.chzzkId}`,
+          latestStreamer.profileImageUrl
         );
 
         await this.notificationService.sendNotification(notification);

@@ -37,7 +37,6 @@ module.exports = {
   externals: {
     'better-sqlite3': 'commonjs better-sqlite3',
     'node-notifier': 'commonjs node-notifier',
-    'playwright': 'commonjs playwright',
-    'canvas': 'commonjs canvas'
+    'playwright': 'commonjs playwright'
   }
 };

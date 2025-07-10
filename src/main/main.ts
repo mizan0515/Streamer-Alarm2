@@ -5,6 +5,7 @@ import { MonitoringService } from './services/MonitoringService';
 import { NotificationService } from './services/NotificationService';
 import { TrayService } from './services/TrayService';
 import { SettingsService } from './services/SettingsService';
+import { StreamerSearchService } from './services/StreamerSearchService';
 import { IpcEvents } from '@shared/types';
 
 class StreamerAlarmApp {
@@ -15,6 +16,7 @@ class StreamerAlarmApp {
   private notificationService: NotificationService;
   private trayService: TrayService;
   private settingsService: SettingsService;
+  private streamerSearchService: StreamerSearchService;
   private isDev: boolean;
 
   constructor() {
@@ -29,6 +31,7 @@ class StreamerAlarmApp {
       this.notificationService
     );
     this.trayService = new TrayService(this);
+    this.streamerSearchService = new StreamerSearchService();
   }
 
   async initialize(): Promise<void> {
@@ -350,6 +353,35 @@ class StreamerAlarmApp {
 
     ipcMain.handle('quit-app', async () => {
       this.quit();
+    });
+
+    // 스트리머 검색 IPC
+    ipcMain.handle('search-streamer', async (_, name: string) => {
+      console.log('🔍 IPC: search-streamer received for:', name);
+      try {
+        const result = await this.streamerSearchService.searchStreamer(name);
+        console.log('✅ IPC: search-streamer success:', {
+          chzzk: result.chzzk.length,
+          twitter: result.twitter.length,
+          cafe: result.cafe.length
+        });
+        return result;
+      } catch (error) {
+        console.error('❌ IPC: search-streamer failed:', error);
+        throw error;
+      }
+    });
+
+    ipcMain.handle('parse-streamer-url', async (_, url: string) => {
+      console.log('🔗 IPC: parse-streamer-url received:', url);
+      try {
+        const result = StreamerSearchService.parseUrl(url);
+        console.log('✅ IPC: parse-streamer-url result:', result);
+        return result;
+      } catch (error) {
+        console.error('❌ IPC: parse-streamer-url failed:', error);
+        throw error;
+      }
     });
 
     // 카페 모니터링 상태 초기화 IPC

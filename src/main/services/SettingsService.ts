@@ -62,7 +62,8 @@ export class SettingsService {
       showDesktopNotifications: settings.showDesktopNotifications === 'true',
       cacheCleanupInterval: parseInt(settings.cacheCleanupInterval || '3600'),
       theme: settings.theme || 'dark',
-      needNaverLogin: settings.needNaverLogin === 'true'
+      needNaverLogin: settings.needNaverLogin === 'true',
+      newStreamerFilterHours: parseInt(settings.newStreamerFilterHours || '24')
     };
   }
 
@@ -103,7 +104,8 @@ export class SettingsService {
       showDesktopNotifications: 'true',
       cacheCleanupInterval: '3600',
       theme: 'dark',
-      needNaverLogin: 'true'
+      needNaverLogin: 'true',
+      newStreamerFilterHours: '24' // 새 스트리머 과거 알림 필터링 시간 (기본 24시간)
     };
 
     return defaults[key] || '';

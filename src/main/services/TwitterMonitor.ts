@@ -18,6 +18,7 @@ export class TwitterMonitor {
   private rssParser: Parser;
   private databaseManager: DatabaseManager;
   private notificationService: NotificationService;
+  private settingsService: any; // SettingsService
   private lastTweetIds: Map<string, string> = new Map();
 
   // Nitter 인스턴스 목록 (백업 지원)
@@ -31,9 +32,10 @@ export class TwitterMonitor {
   
   private currentInstanceIndex = 0;
 
-  constructor(databaseManager: DatabaseManager, notificationService: NotificationService) {
+  constructor(databaseManager: DatabaseManager, notificationService: NotificationService, settingsService?: any) {
     this.databaseManager = databaseManager;
     this.notificationService = notificationService;
+    this.settingsService = settingsService || null;
     
     // HTTP 클라이언트 설정
     this.httpClient = axios.create({
@@ -109,13 +111,47 @@ export class TwitterMonitor {
       const lastState = await this.databaseManager.getMonitorState(streamer.id, 'twitter');
       const lastTweetId = lastState?.lastContentId || this.lastTweetIds.get(streamer.twitterUsername);
 
+      // 🚨 NEW: 새 스트리머 초기화 처리 (과거 알림 폭탄 방지)
+      const isNewStreamer = !lastTweetId;
+      if (isNewStreamer && feed.items.length > 0) {
+        console.log(`🆕 ${streamer.name}: 새 스트리머 감지됨 - 과거 알림 차단 모드 활성화`);
+        
+        // 최신 트윗 ID만 저장하고 알림은 차단
+        const latestTweet = this.parseRSSItem(feed.items[0], streamer.twitterUsername);
+        if (latestTweet) {
+          await this.databaseManager.setMonitorState(
+            streamer.id,
+            'twitter',
+            latestTweet.id, // 현재 최신 트윗을 기준점으로 설정
+            'initialized'
+          );
+          this.lastTweetIds.set(streamer.twitterUsername, latestTweet.id);
+          console.log(`🆕 ${streamer.name}: 초기 기준점 설정 완료 (ID: ${latestTweet.id})`);
+        }
+        
+        // 새 스트리머는 빈 배열 반환 (과거 알림 차단)
+        return [];
+      }
+
       // 최신 20개 트윗 처리
       for (const item of feed.items.slice(0, 20)) {
         const tweet = this.parseRSSItem(item, streamer.twitterUsername);
         if (!tweet) continue;
 
         // 새 트윗인지 확인 (ID 기반 - 숫자 비교)
-        if (!lastTweetId || this.compareTwitterIds(tweet.id, lastTweetId) > 0) {
+        if (lastTweetId && this.compareTwitterIds(tweet.id, lastTweetId) > 0) {
+          // 🚨 NEW: 시간 기반 이중 필터링 (설정 가능한 시간 내 트윗만)
+          const tweetTime = new Date(tweet.timestamp);
+          const now = new Date();
+          const timeDiff = now.getTime() - tweetTime.getTime();
+          const hoursAgo = timeDiff / (1000 * 60 * 60);
+          const filterHours = this.settingsService ? parseInt(this.settingsService.getSetting('newStreamerFilterHours')) : 24;
+          
+          if (hoursAgo > filterHours) {
+            console.log(`⏰ ${streamer.name}: 트윗 "${tweet.content.substring(0, 50)}..." - ${filterHours}시간 이상 경과 (${hoursAgo.toFixed(1)}시간), 알림 차단`);
+            continue;
+          }
+          
           tweets.push(tweet);
         }
       }
@@ -164,7 +200,11 @@ export class TwitterMonitor {
 
       const tweetId = tweetIdMatch[1];
 
-      // 내용 정제
+      // HTML 원본에서 이미지 및 미디어 링크 추출
+      let contentHtml = item.content || item.title || '';
+      contentHtml = this.enhanceContentWithMedia(contentHtml, username, tweetId);
+      
+      // 내용 정제 (알림 표시용)
       let content = item.contentSnippet || item.title || '';
       content = this.cleanTweetContent(content);
 
@@ -178,6 +218,7 @@ export class TwitterMonitor {
       return {
         id: tweetId,
         content: content,
+        contentHtml: contentHtml,
         url: realUrl,
         timestamp: originalTimestamp.toISOString()
       };
@@ -229,8 +270,12 @@ export class TwitterMonitor {
   private async handleNewTweets(streamer: StreamerData, tweets: TwitterTweet[]): Promise<void> {
     if (tweets.length === 0) return;
 
-    // 스트리머별 트위터 알림 설정 확인
-    if (!streamer.notifications?.twitter) return;
+    // 최신 스트리머 정보 다시 조회 (알림 설정 동기화)
+    const latestStreamers = await this.databaseManager.getStreamers();
+    const latestStreamer = latestStreamers.find(s => s.id === streamer.id);
+
+    // 스트리머별 트위터 알림 설정 확인 (최신 정보 기준)
+    if (!latestStreamer?.notifications?.twitter || !latestStreamer.isActive) return;
 
     // 데이터베이스에서 마지막 트윗 ID 조회
     const lastState = await this.databaseManager.getMonitorState(streamer.id, 'twitter');
@@ -243,11 +288,12 @@ export class TwitterMonitor {
       }
 
       const notification = this.notificationService.createTwitterNotification(
-        streamer.name,
+        latestStreamer.name,
         tweet.content,
         tweet.url,
-        streamer.profileImageUrl,
-        new Date(tweet.timestamp) // Pass the original tweet timestamp
+        latestStreamer.profileImageUrl,
+        new Date(tweet.timestamp), // Pass the original tweet timestamp
+        tweet.contentHtml // Pass the HTML content
       );
 
       await this.notificationService.sendNotification(notification);
@@ -265,7 +311,7 @@ export class TwitterMonitor {
       );
       
       // 메모리 캐시도 업데이트 (호환성 유지)
-      this.lastTweetIds.set(streamer.twitterUsername!, latestTweet.id);
+      this.lastTweetIds.set(latestStreamer.twitterUsername || streamer.twitterUsername!, latestTweet.id);
     }
   }
 
@@ -343,6 +389,71 @@ export class TwitterMonitor {
       if (id1 > id2) return 1;
       if (id1 < id2) return -1;
       return 0;
+    }
+  }
+
+  // 트위터 컨텐츠에 미디어 정보 추가
+  private enhanceContentWithMedia(contentHtml: string, username: string, tweetId: string): string {
+    try {
+      // HTML에서 이미지 링크 추출
+      const imageRegex = /<img[^>]+src="([^"]+)"[^>]*>/gi;
+      const linkRegex = /<a[^>]+href="([^"]+)"[^>]*>([^<]*)<\/a>/gi;
+      
+      let enhancedContent = contentHtml;
+      
+      // 이미지 태그를 찾아서 실제 이미지 URL로 변환
+      enhancedContent = enhancedContent.replace(imageRegex, (match, src) => {
+        // Nitter 이미지 URL을 실제 Twitter 미디어 URL로 변환 시도
+        if (src.includes('pic.twitter.com') || src.includes('pbs.twimg.com')) {
+          return `<img src="${src}" alt="트위터 이미지" style="max-width: 100%; height: auto;" />`;
+        }
+        
+        // Nitter 인스턴스의 이미지를 원본으로 변환
+        if (src.includes('/pic/')) {
+          const mediaMatch = src.match(/\/pic\/(.+)/);
+          if (mediaMatch) {
+            const originalUrl = `https://pbs.twimg.com/media/${mediaMatch[1]}`;
+            return `<img src="${originalUrl}" alt="트위터 이미지" style="max-width: 100%; height: auto;" />`;
+          }
+        }
+        
+        return match; // 변환 실패 시 원본 유지
+      });
+      
+      // 링크에서 이미지 URL 추출 및 추가
+      const imageLinks: string[] = [];
+      enhancedContent.replace(linkRegex, (match, href, text) => {
+        // pic.twitter.com 링크 감지
+        if (href.includes('pic.twitter.com')) {
+          imageLinks.push(`<div class="twitter-image-link">🖼️ <a href="${href}" target="_blank">이미지 보기: ${text}</a></div>`);
+        }
+        
+        // 미디어 파일 확장자 감지
+        if (/\.(jpg|jpeg|png|gif|webp|mp4|mov)(\?|$)/i.test(href)) {
+          const isVideo = /\.(mp4|mov)(\?|$)/i.test(href);
+          const mediaType = isVideo ? '🎥 비디오' : '🖼️ 이미지';
+          imageLinks.push(`<div class="twitter-media-link">${mediaType} <a href="${href}" target="_blank">미디어 보기</a></div>`);
+        }
+        
+        return match;
+      });
+      
+      // 발견된 이미지 링크들을 컨텐츠 끝에 추가
+      if (imageLinks.length > 0) {
+        enhancedContent += '<div class="twitter-media-section">' + imageLinks.join('') + '</div>';
+      }
+      
+      // 트위터 미디어 정보가 없는 경우 기본 미디어 링크 생성
+      if (!enhancedContent.includes('twitter-image') && !enhancedContent.includes('<img')) {
+        // 트윗에 첨부된 미디어가 있을 가능성을 위한 링크 추가
+        const mediaUrl = `https://x.com/${username}/status/${tweetId}/photo/1`;
+        enhancedContent += `<div class="twitter-potential-media">🔗 <a href="${mediaUrl}" target="_blank">트윗에서 미디어 확인하기</a></div>`;
+      }
+      
+      return enhancedContent;
+    } catch (error) {
+      console.error('Failed to enhance content with media:', error);
+      return contentHtml; // 오류 시 원본 반환
     }
   }
 

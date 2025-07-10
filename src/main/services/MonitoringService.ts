@@ -32,7 +32,7 @@ export class MonitoringService {
     
     // 모니터링 서비스들 초기화
     this.chzzkMonitor = new ChzzkMonitor(databaseManager, notificationService);
-    this.twitterMonitor = new TwitterMonitor(databaseManager, notificationService);
+    this.twitterMonitor = new TwitterMonitor(databaseManager, notificationService, this.settingsService);
     this.cafeMonitor = new CafeMonitor(databaseManager, notificationService, this.settingsService);
   }
 

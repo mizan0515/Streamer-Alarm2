@@ -47,46 +47,125 @@ export class TrayService {
   private createFallbackIcon(): Electron.NativeImage {
     // 앱 아이콘을 시스템 트레이에 적합한 크기로 사용
     const path = require('path');
-    const iconPath = path.join(__dirname, '../../assets/icon.png');
+    const { app } = require('electron');
     
-    try {
-      const icon = nativeImage.createFromPath(iconPath);
-      // 시스템 트레이에 적합한 크기로 리사이즈 (16x16)
-      return icon.resize({ width: 16, height: 16 });
-    } catch (error: any) {
-      console.warn('Failed to load app icon, using fallback:', error.message);
-      // 완전 fallback: 간단한 색상 아이콘 생성
+    // 다양한 가능한 아이콘 경로들
+    const possibleIconPaths = [
+      path.join(__dirname, '../../../assets/icon.png'),      // 일반적인 경로
+      path.join(__dirname, '../../assets/icon.png'),         // 기존 경로
+      path.join(process.resourcesPath, 'assets/icon.png'),   // 패키지된 앱
+      path.join(app.getAppPath(), 'assets/icon.png'),        // 앱 경로 기준
+      path.join(process.cwd(), 'assets/icon.png')            // 현재 작업 디렉토리
+    ];
+    
+    for (const iconPath of possibleIconPaths) {
       try {
-        const canvas = require('canvas').createCanvas(16, 16);
-        const ctx = canvas.getContext('2d');
-
-        // 빨간 배경
-        ctx.fillStyle = '#ff4444';
-        ctx.fillRect(0, 0, 16, 16);
-
-        // 흰색 TV 모양
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(2, 3, 12, 9);
+        console.log(`🔍 Trying icon path: ${iconPath}`);
+        const fs = require('fs');
         
-        // TV 스크린 (검은색)
-        ctx.fillStyle = '#000000';
-        ctx.fillRect(3, 4, 10, 7);
-        
-        // TV 안테나
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(7, 1, 1, 2);
-        ctx.fillRect(6, 1, 1, 1);
-        ctx.fillRect(9, 1, 1, 1);
-
-        const buffer = canvas.toBuffer('image/png');
-        return nativeImage.createFromBuffer(buffer);
-      } catch (canvasError: any) {
-        console.error('Canvas fallback also failed:', canvasError.message);
-        // 최후의 수단: 빈 아이콘
-        const emptyBuffer = Buffer.alloc(16 * 16 * 4); // RGBA
-        return nativeImage.createFromBuffer(emptyBuffer, { width: 16, height: 16 });
+        if (fs.existsSync(iconPath)) {
+          console.log(`✅ Found icon at: ${iconPath}`);
+          const icon = nativeImage.createFromPath(iconPath);
+          
+          if (!icon.isEmpty()) {
+            // 시스템 트레이에 적합한 크기로 리사이즈 (16x16)
+            return icon.resize({ width: 16, height: 16 });
+          }
+        } else {
+          console.log(`❌ Icon not found at: ${iconPath}`);
+        }
+      } catch (error: any) {
+        console.warn(`⚠️ Failed to load icon from ${iconPath}:`, error.message);
+        continue;
       }
     }
+    
+    console.warn('📁 All icon paths failed, creating pixel-based fallback icon');
+    
+    // Canvas 없이 안전한 fallback 시스템
+    try {
+      // 1차 시도: 16x16 PNG 바이너리 데이터로 간단한 아이콘 생성
+      return this.createPixelIcon();
+    } catch (pixelError: any) {
+      console.error('Pixel icon creation failed:', pixelError.message);
+      
+      // 2차 시도 (최후의 수단): 단색 아이콘
+      return this.createSimpleColorIcon();
+    }
+  }
+
+  private createPixelIcon(): Electron.NativeImage {
+    // 16x16 RGBA 바이트 배열로 간단한 TV 아이콘 생성
+    const width = 16;
+    const height = 16;
+    const buffer = Buffer.alloc(width * height * 4); // RGBA
+    
+    // 픽셀 색상 정의
+    const red = [255, 68, 68, 255];    // #ff4444
+    const white = [255, 255, 255, 255]; // #ffffff
+    const black = [0, 0, 0, 255];       // #000000
+    const transparent = [0, 0, 0, 0];   // 투명
+    
+    // 16x16 TV 모양 패턴 (간단한 비트맵)
+    const pattern = [
+      [0,0,0,0,0,0,1,1,1,1,0,0,0,0,0,0], // 안테나
+      [0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0],
+      [0,0,1,1,1,1,1,1,1,1,1,1,1,1,0,0], // TV 상단
+      [0,0,1,2,2,2,2,2,2,2,2,2,2,1,0,0], // TV 테두리
+      [0,0,1,2,3,3,3,3,3,3,3,3,2,1,0,0], // 스크린 시작
+      [0,0,1,2,3,3,3,3,3,3,3,3,2,1,0,0],
+      [0,0,1,2,3,3,3,3,3,3,3,3,2,1,0,0],
+      [0,0,1,2,3,3,3,3,3,3,3,3,2,1,0,0],
+      [0,0,1,2,3,3,3,3,3,3,3,3,2,1,0,0],
+      [0,0,1,2,3,3,3,3,3,3,3,3,2,1,0,0],
+      [0,0,1,2,3,3,3,3,3,3,3,3,2,1,0,0], // 스크린 끝
+      [0,0,1,2,2,2,2,2,2,2,2,2,2,1,0,0], // TV 하단
+      [0,0,1,1,1,1,1,1,1,1,1,1,1,1,0,0],
+      [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+      [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+      [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+    ];
+    
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const pixelIndex = (y * width + x) * 4;
+        let color = transparent;
+        
+        switch (pattern[y][x]) {
+          case 1: color = white; break;   // TV 테두리
+          case 2: color = red; break;     // TV 몸체
+          case 3: color = black; break;   // 스크린
+          default: color = transparent;   // 배경
+        }
+        
+        buffer[pixelIndex] = color[0];     // R
+        buffer[pixelIndex + 1] = color[1]; // G
+        buffer[pixelIndex + 2] = color[2]; // B
+        buffer[pixelIndex + 3] = color[3]; // A
+      }
+    }
+    
+    return nativeImage.createFromBuffer(buffer, { width, height });
+  }
+
+
+  private createSimpleColorIcon(): Electron.NativeImage {
+    // 최종 fallback: 단순한 단색 아이콘
+    const width = 16;
+    const height = 16;
+    const buffer = Buffer.alloc(width * height * 4);
+    
+    // 단순한 빨간색 사각형
+    for (let i = 0; i < width * height; i++) {
+      const index = i * 4;
+      buffer[index] = 255;     // R
+      buffer[index + 1] = 68;  // G
+      buffer[index + 2] = 68;  // B
+      buffer[index + 3] = 255; // A
+    }
+    
+    console.log('🎨 Created simple color icon as final fallback');
+    return nativeImage.createFromBuffer(buffer, { width, height });
   }
 
   updateContextMenu(stats?: { 

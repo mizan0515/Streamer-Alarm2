@@ -83,6 +83,7 @@ export class DatabaseManager {
         type TEXT NOT NULL CHECK (type IN ('live', 'cafe', 'twitter')),
         title TEXT NOT NULL,
         content TEXT,
+        content_html TEXT,
         url TEXT,
         unique_key TEXT UNIQUE,
         profile_image_url TEXT,
@@ -181,6 +182,18 @@ export class DatabaseManager {
           console.log('✅ is_read column already exists');
         } else {
           console.warn('⚠️ Could not add is_read column:', error.message);
+        }
+      }
+
+      // 알림 테이블에 content_html 컬럼 추가 (없는 경우)
+      try {
+        this.db.exec(`ALTER TABLE notifications ADD COLUMN content_html TEXT`);
+        console.log('✅ Added content_html column to notifications table');
+      } catch (error: any) {
+        if (error.code === 'SQLITE_ERROR' && error.message.includes('duplicate column name')) {
+          console.log('✅ content_html column already exists');
+        } else {
+          console.warn('⚠️ Could not add content_html column:', error.message);
         }
       }
       
@@ -352,6 +365,7 @@ export class DatabaseManager {
              n.type,
              n.title,
              n.content,
+             n.content_html as contentHtml,
              n.url,
              n.unique_key as uniqueKey,
              COALESCE(n.profile_image_url, s.profile_image_url) as profileImageUrl,
@@ -401,6 +415,7 @@ export class DatabaseManager {
       type: row.type,
       title: row.title,
       content: row.content,
+      contentHtml: row.contentHtml,
       url: row.url,
       uniqueKey: row.uniqueKey,
       profileImageUrl: row.profileImageUrl,
@@ -415,8 +430,8 @@ export class DatabaseManager {
     
     const insertNotification = this.db.prepare(`
       INSERT OR IGNORE INTO notifications (
-        streamer_id, type, title, content, url, unique_key, profile_image_url, is_read, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        streamer_id, type, title, content, content_html, url, unique_key, profile_image_url, is_read, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     insertNotification.run(
@@ -424,6 +439,7 @@ export class DatabaseManager {
       notification.type,
       notification.title,
       notification.content || null,
+      notification.contentHtml || null,
       notification.url,
       notification.uniqueKey,
       notification.profileImageUrl || null,
@@ -564,13 +580,14 @@ export class DatabaseManager {
         if (streamerResult) {
           this.db.prepare(`
             INSERT OR IGNORE INTO notifications (
-              streamer_id, type, title, content, url, unique_key, profile_image_url, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+              streamer_id, type, title, content, content_html, url, unique_key, profile_image_url, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
           `).run(
             streamerResult.id,
             notification.type,
             notification.title,
             notification.content || null,
+            notification.content_html || null,
             notification.url,
             notification.unique_key,
             notification.profile_image_url || null,
