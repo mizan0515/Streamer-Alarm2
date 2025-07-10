@@ -487,23 +487,46 @@ export class CafeMonitor {
           const posts = await this.checkStreamerPosts(streamer, silentMode);
           
           if (posts.length > 0 && !silentMode) {
-            console.log(`${streamer.name}: ${posts.length}개 새 게시물 발견, 알림 전송 시작...`);
+            console.log(`${streamer.name}: ${posts.length}개 새 게시물 발견`);
             
-            // 즉시 알림 전송
-            for (const post of posts) {
-              try {
-                const notification = this.notificationService.createCafeNotification(
-                  streamer.name,
-                  post.title,
-                  post.url,
-                  streamer.profileImageUrl,
-                  new Date(post.timestamp) // Pass the original post timestamp
-                );
-                await this.notificationService.sendNotification(notification);
-                console.log(`${streamer.name}: "${post.title}" 알림 전송 완료`);
-              } catch (notifError) {
-                console.error(`${streamer.name}: 알림 전송 실패 - ${notifError}`);
+            // 최신 스트리머 정보 다시 조회 (알림 설정 동기화)
+            const latestStreamers = await this.databaseManager.getStreamers();
+            const latestStreamer = latestStreamers.find(s => s.id === streamer.id);
+            
+            // 스트리머별 카페 알림 설정 확인 (최신 정보 기준)
+            if (latestStreamer?.notifications?.cafe && latestStreamer.isActive) {
+              console.log(`${streamer.name}: 카페 알림이 활성화되어 있음, 알림 전송 시작...`);
+              
+              // 알림 전송 (HTML 본문 포함)
+              for (const post of posts) {
+                try {
+                  // 게시물 HTML 본문 추출
+                  let contentHtml: string | undefined;
+                  try {
+                    contentHtml = await this.fetchPostContent(post.url) || undefined;
+                    if (contentHtml) {
+                      console.log(`${streamer.name}: "${post.title}" HTML 본문 추출 성공 (${contentHtml.length}자)`);
+                    }
+                  } catch (htmlError) {
+                    console.warn(`${streamer.name}: HTML 본문 추출 실패 - ${htmlError}`);
+                  }
+
+                  const notification = this.notificationService.createCafeNotification(
+                    latestStreamer.name,
+                    post.title,
+                    post.url,
+                    latestStreamer.profileImageUrl,
+                    new Date(post.timestamp), // Pass the original post timestamp
+                    contentHtml // Pass the extracted HTML content
+                  );
+                  await this.notificationService.sendNotification(notification);
+                  console.log(`${streamer.name}: "${post.title}" 알림 전송 완료`);
+                } catch (notifError) {
+                  console.error(`${streamer.name}: 알림 전송 실패 - ${notifError}`);
+                }
               }
+            } else {
+              console.log(`${streamer.name}: 카페 알림이 비활성화되어 있음, 알림 전송 스킵`);
             }
           }
           
@@ -584,16 +607,49 @@ export class CafeMonitor {
       const lastState = await this.databaseManager.getMonitorState(streamer.id, 'cafe');
       const lastPostId = lastState?.lastContentId || this.lastPostIds.get(streamer.naverCafeUserId);
       
+      // 🚨 NEW: 새 스트리머 초기화 처리 (과거 알림 폭탄 방지)
+      const isNewStreamer = !lastPostId;
+      if (isNewStreamer) {
+        console.log(`🆕 ${streamer.name}: 새 스트리머 감지됨 - 과거 알림 차단 모드 활성화`);
+        
+        // 최신 게시물 ID만 저장하고 알림은 차단
+        if (posts.posts.length > 0 && posts.posts[0].id) {
+          await this.databaseManager.setMonitorState(
+            streamer.id,
+            'cafe',
+            posts.posts[0].id, // 현재 최신 게시물을 기준점으로 설정
+            'initialized'
+          );
+          this.lastPostIds.set(streamer.naverCafeUserId, posts.posts[0].id);
+          console.log(`🆕 ${streamer.name}: 초기 기준점 설정 완료 (ID: ${posts.posts[0].id})`);
+        }
+        
+        // 새 스트리머는 빈 배열 반환 (과거 알림 차단)
+        return [];
+      }
+      
       const newPosts: CafePost[] = [];
 
       for (const post of posts.posts) {
         if (!post.id) continue;
 
         // 새 게시물인지 확인 (숫자 비교)
-        const isNewPost = !lastPostId || this.compareCafePostIds(post.id, lastPostId) > 0;
+        const isNewPost = this.compareCafePostIds(post.id, lastPostId) > 0;
         
         if (isNewPost) {
           const originalTimestamp = this.parseCafeDate(post.date);
+          
+          // 🚨 NEW: 시간 기반 이중 필터링 (설정 가능한 시간 내 게시물만)
+          const now = new Date();
+          const timeDiff = now.getTime() - originalTimestamp.getTime();
+          const hoursAgo = timeDiff / (1000 * 60 * 60);
+          const filterHours = parseInt(this.settingsService.getSetting('newStreamerFilterHours'));
+          
+          if (hoursAgo > filterHours) {
+            console.log(`⏰ ${streamer.name}: 게시물 "${post.title}" - ${filterHours}시간 이상 경과 (${hoursAgo.toFixed(1)}시간), 알림 차단`);
+            continue;
+          }
+          
           console.log(`${streamer.name}: 게시물 "${post.title}" - 원본 시간: ${post.date} → 파싱된 시간: ${originalTimestamp.toISOString()}`);
           
           newPosts.push({
@@ -673,12 +729,21 @@ export class CafeMonitor {
         continue;
       }
 
+      // 게시물 HTML 본문 추출
+      let contentHtml: string | undefined;
+      try {
+        contentHtml = await this.fetchPostContent(post.url) || undefined;
+      } catch (htmlError) {
+        console.warn(`HTML 본문 추출 실패: ${htmlError}`);
+      }
+
       const notification = this.notificationService.createCafeNotification(
         streamer.name,
         post.title,
         post.url,
         streamer.profileImageUrl,
-        new Date(post.timestamp) // Pass the original post timestamp
+        new Date(post.timestamp), // Pass the original post timestamp
+        contentHtml // Pass the extracted HTML content
       );
 
       await this.notificationService.sendNotification(notification);
@@ -808,6 +873,113 @@ export class CafeMonitor {
       if (id1 > id2) return 1;
       if (id1 < id2) return -1;
       return 0;
+    }
+  }
+
+  // 카페 게시물의 전체 HTML 내용 추출
+  async fetchPostContent(postUrl: string): Promise<string | null> {
+    if (!this.page) {
+      console.warn('Browser page not available for content extraction');
+      return null;
+    }
+
+    try {
+      console.log(`📄 카페 게시물 내용 추출 시작: ${postUrl}`);
+      
+      // 게시물 페이지로 이동
+      await this.page.goto(postUrl, { 
+        waitUntil: 'domcontentloaded', 
+        timeout: 15000 
+      });
+      
+      // 게시물 내용 영역이 로드될 때까지 대기
+      try {
+        await this.page.waitForSelector('.se-viewer, .ArticleContentBox', { timeout: 8000 });
+      } catch (selectorError) {
+        console.warn('게시물 내용 영역을 찾을 수 없습니다');
+        return null;
+      }
+      
+      // HTML 내용 추출
+      const contentHtml = await this.page.evaluate(() => {
+        // 우선순위별 셀렉터로 게시물 내용 찾기
+        const contentSelectors = [
+          '.se-main-container',           // 스마트에디터 메인 컨테이너 (가장 정확)
+          '.se-viewer .se-main-container', // 뷰어 내부의 메인 컨테이너
+          '.article_viewer .se-main-container', // 아티클 뷰어 내부
+          '.CafeViewer .se-main-container',     // 카페 뷰어 내부
+          '.se-viewer',                   // 스마트에디터 뷰어 전체
+          '.article_viewer',              // 게시물 뷰어
+          '.CafeViewer',                  // 카페 뷰어
+          '.ArticleContentBox .content',  // 게시물 컨텐츠 박스
+          '#postViewArea'                 // 게시물 보기 영역
+        ];
+        
+        console.log('🔍 카페 게시물 내용 추출 시도...');
+        
+        for (const selector of contentSelectors) {
+          const contentElement = document.querySelector(selector);
+          if (contentElement) {
+            console.log(`✅ 셀렉터로 요소 발견: ${selector}`);
+            
+            // HTML 내용 정제
+            let htmlContent = contentElement.innerHTML;
+            
+            // 불필요한 요소들 제거
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = htmlContent;
+            
+            // 스크립트, 데이터, 광고 등 제거
+            const unwantedSelectors = [
+              'script[type="text/data"]',     // 스마트에디터 데이터 스크립트
+              'script', 'style', 'noscript',
+              '.ad', '.advertisement', '.sponsor',
+              '.share-button', '.reaction-button',
+              '[class*="ad-"]', '[id*="ad-"]',
+              '.__se_module_data'             // 스마트에디터 모듈 데이터
+            ];
+            
+            unwantedSelectors.forEach(sel => {
+              const elements = tempDiv.querySelectorAll(sel);
+              elements.forEach(el => el.remove());
+            });
+            
+            // 정제된 HTML 반환
+            const cleanedHtml = tempDiv.innerHTML.trim();
+            
+            // 텍스트 내용 확인 (빈 내용 방지)
+            const textContent = tempDiv.textContent || tempDiv.innerText || '';
+            const cleanTextContent = textContent.replace(/\s+/g, ' ').trim();
+            
+            console.log(`📄 추출된 텍스트 길이: ${cleanTextContent.length}자`);
+            console.log(`📄 추출된 텍스트 샘플: "${cleanTextContent.substring(0, 100)}..."`);
+            
+            if (cleanTextContent.length > 5) { // 최소 5자 이상의 텍스트가 있어야 함
+              console.log(`✅ 유효한 내용 발견: ${selector}`);
+              return cleanedHtml;
+            } else {
+              console.log(`❌ 내용이 너무 짧음: ${selector}`);
+            }
+          } else {
+            console.log(`❌ 요소 없음: ${selector}`);
+          }
+        }
+        
+        console.log('❌ 모든 셀렉터에서 유효한 내용을 찾지 못함');
+        return null; // 유효한 내용을 찾지 못함
+      });
+      
+      if (contentHtml && contentHtml.length > 20) {
+        console.log(`✅ 게시물 내용 추출 성공: ${contentHtml.length}자`);
+        return contentHtml;
+      } else {
+        console.warn('게시물 내용이 너무 짧거나 비어있습니다');
+        return null;
+      }
+      
+    } catch (error) {
+      console.error(`게시물 내용 추출 실패: ${postUrl}`, error);
+      return null;
     }
   }
 

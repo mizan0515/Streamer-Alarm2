@@ -41,6 +41,10 @@ const electronAPI = {
   // 카페 모니터링 상태 초기화
   clearCafeStates: () => ipcRenderer.invoke('clear-cafe-states'),
 
+  // 스트리머 검색
+  searchStreamer: (name: string) => ipcRenderer.invoke('search-streamer', name),
+  parseStreamerUrl: (url: string) => ipcRenderer.invoke('parse-streamer-url', url),
+
   // 이벤트 리스너
   onStreamerDataUpdated: (callback: (streamers: any[]) => void) => {
     ipcRenderer.on('streamer-data-updated', (_, streamers) => callback(streamers));

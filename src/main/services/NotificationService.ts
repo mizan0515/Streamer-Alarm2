@@ -190,6 +190,7 @@ export class NotificationService {
         type: data.type,
         title: data.title,
         content: data.content,
+        contentHtml: data.contentHtml,
         url: data.url || '',
         uniqueKey: data.uniqueKey,
         profileImageUrl: data.profileImageUrl,
@@ -225,13 +226,15 @@ export class NotificationService {
     postTitle: string,
     url: string,
     profileImageUrl?: string,
-    originalTimestamp?: Date
+    originalTimestamp?: Date,
+    contentHtml?: string
   ): NotificationData {
     return {
       type: 'cafe',
       streamerName,
       title: `💬 ${streamerName}님의 카페 글`,
       content: postTitle,
+      contentHtml: contentHtml,
       url,
       profileImageUrl,
       uniqueKey: `cafe_${streamerName}_${this.extractPostId(url)}`,
@@ -244,13 +247,15 @@ export class NotificationService {
     tweetContent: string,
     url: string,
     profileImageUrl?: string,
-    originalTimestamp?: Date
+    originalTimestamp?: Date,
+    contentHtml?: string
   ): NotificationData {
     return {
       type: 'twitter',
       streamerName,
       title: `🐦 ${streamerName}님의 트윗`,
       content: tweetContent,
+      contentHtml: contentHtml,
       url,
       profileImageUrl,
       uniqueKey: `twitter_${streamerName}_${this.extractTweetId(url)}`,

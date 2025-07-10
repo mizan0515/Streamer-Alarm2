@@ -31,6 +31,7 @@ export interface NotificationRecord {
   type: 'live' | 'cafe' | 'twitter' | 'system';
   title: string;
   content?: string;
+  contentHtml?: string;
   url: string;
   uniqueKey: string;
   profileImageUrl?: string;
@@ -65,6 +66,7 @@ export interface NotificationData {
   streamerName: string;
   title: string;
   content?: string;
+  contentHtml?: string;
   url?: string;
   profileImageUrl?: string;
   uniqueKey: string;
@@ -82,8 +84,28 @@ export interface CafePost {
 export interface TwitterTweet {
   id: string;
   content: string;
+  contentHtml?: string;
   url: string;
   timestamp: string;
+}
+
+// 스트리머 검색 결과 타입
+export interface StreamerSearchResult {
+  platform: 'chzzk' | 'twitter' | 'cafe';
+  name: string;
+  displayName: string;
+  id: string;
+  profileImageUrl?: string;
+  verified?: boolean;
+  followerCount?: number;
+  description?: string;
+  url: string;
+}
+
+export interface StreamerSearchResults {
+  chzzk: StreamerSearchResult[];
+  twitter: StreamerSearchResult[];
+  cafe: StreamerSearchResult[];
 }
 
 // IPC 통신 이벤트 타입
@@ -119,6 +141,8 @@ export interface IpcEvents {
   'open-external': string;
   'show-tray-menu': void;
   'quit-app': void;
+  'search-streamer': string;
+  'parse-streamer-url': string;
 }
 
 // 설정 키 타입
@@ -129,7 +153,8 @@ export type SettingKey =
   | 'showDesktopNotifications'
   | 'cacheCleanupInterval'
   | 'theme'
-  | 'needNaverLogin';
+  | 'needNaverLogin'
+  | 'newStreamerFilterHours'; // 새 스트리머 과거 알림 필터링 시간 (시간 단위)
 
 // 알림 설정 컨텍스트
 export interface NotificationConfig {

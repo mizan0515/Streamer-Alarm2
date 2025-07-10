@@ -117,6 +117,8 @@ streamer-alarm.db
 !tsconfig.json
 !webpack.*.js
 
-
+token.txt
 GUIDE_FOR_AI.md
-CLAUDE.md
+CLAUDE.md11
+TO_DO.md
+acli.exe

@@ -17,9 +17,10 @@
     "build:main": "cross-env NODE_ENV=production webpack --config webpack.main.config.js --mode production",
     "build:renderer": "cross-env NODE_ENV=production webpack --config webpack.renderer.config.js --mode production",
     "start": "electron .",
-    "pack": "electron-builder --dir",
-    "dist": "npm run build && electron-builder",
-    "postinstall": "electron-builder install-app-deps && npx electron-rebuild && playwright install chromium"
+    "pack": "electron-builder --dir && npm run verify-build",
+    "dist": "npm run build && electron-builder && npm run verify-build",
+    "verify-build": "node scripts/verify-build.js",
+    "postinstall": "electron-builder install-app-deps"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
@@ -30,7 +31,6 @@
     "@typescript-eslint/eslint-plugin": "^6.15.0",
     "@typescript-eslint/parser": "^6.15.0",
     "autoprefixer": "^10.4.21",
-    "canvas": "^3.1.2",
     "concurrently": "^8.2.2",
     "cross-env": "^7.0.3",
     "css-loader": "^6.8.1",
@@ -78,8 +78,6 @@
     "extraResources": [],
     "asarUnpack": [
       "node_modules/better-sqlite3/**/*",
-      "node_modules/canvas/**/*",
-      "node_modules/@mapbox/**/*",
       "node_modules/node-addon-api/**/*",
       "node_modules/playwright/**/*",
       "node_modules/playwright-core/**/*"
@@ -93,7 +91,9 @@
           ]
         }
       ],
-      "icon": "assets/icon.ico"
+      "icon": "assets/icon.ico",
+      "requestedExecutionLevel": "asInvoker",
+      "publisherName": "Streamer Alarm Team"
     },
     "nsis": {
       "oneClick": false,
@@ -101,11 +101,13 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "runAfterFinish": true,
-      "perMachine": false
+      "perMachine": false,
+      "allowElevation": true
     },
     "afterPack": "./scripts/after-pack.js",
     "nodeGypRebuild": false,
     "buildDependenciesFromSource": false,
-    "npmRebuild": false
+    "npmRebuild": false,
+    "includeSubNodeModules": true
   }
 }

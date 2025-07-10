@@ -369,6 +369,116 @@ const NotificationHistory: React.FC<NotificationHistoryProps> = ({
     }
   };
 
+  // 툴팁 컴포넌트
+  const NotificationTooltip: React.FC<{ 
+    notification: NotificationRecord; 
+    children: React.ReactNode 
+  }> = ({ notification, children }) => {
+    const [isVisible, setIsVisible] = useState(false);
+    const [position, setPosition] = useState({ x: 0, y: 0 });
+    const tooltipRef = useRef<HTMLDivElement>(null);
+
+    const handleMouseEnter = (e: React.MouseEvent) => {
+      if (!notification.contentHtml) return;
+      
+      const rect = e.currentTarget.getBoundingClientRect();
+      setPosition({
+        x: rect.left + rect.width / 2,
+        y: rect.top - 10
+      });
+      setIsVisible(true);
+    };
+
+    const handleMouseLeave = () => {
+      setIsVisible(false);
+    };
+
+    // HTML 태그 제거 및 텍스트만 추출 (일부 태그는 유지)
+    const sanitizeHtml = (html: string) => {
+      const tempDiv = document.createElement('div');
+      tempDiv.innerHTML = html;
+      
+      // 링크를 텍스트로 변환
+      const links = tempDiv.querySelectorAll('a');
+      links.forEach(link => {
+        const linkText = link.textContent || link.href;
+        link.replaceWith(`🔗${linkText}`);
+      });
+      
+      // 이미지를 텍스트로 변환
+      const images = tempDiv.querySelectorAll('img');
+      images.forEach(img => {
+        const altText = img.alt || '이미지';
+        img.replaceWith(`🖼️[${altText}]`);
+      });
+      
+      // 줄바꿈 유지
+      const brs = tempDiv.querySelectorAll('br');
+      brs.forEach(br => br.replaceWith('\n'));
+      
+      // 단락 구분
+      const ps = tempDiv.querySelectorAll('p');
+      ps.forEach(p => {
+        const text = p.textContent || '';
+        p.replaceWith(text + '\n\n');
+      });
+      
+      return tempDiv.textContent || tempDiv.innerText || '';
+    };
+
+    return (
+      <div 
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+        className="relative"
+      >
+        {children}
+        
+        {isVisible && notification.contentHtml && (
+          <div
+            ref={tooltipRef}
+            className="fixed z-50 max-w-md p-4 bg-gray-900/95 backdrop-blur-sm border border-primary-500/30 rounded-xl shadow-2xl"
+            style={{
+              left: position.x,
+              top: position.y,
+              transform: 'translateX(-50%) translateY(-100%)',
+              pointerEvents: 'none'
+            }}
+          >
+            <div className="text-sm text-gray-300 max-h-48 overflow-y-auto custom-scrollbar">
+              <div className="flex items-center space-x-2 mb-3">
+                <div className="font-medium text-white">본문 미리보기</div>
+                <div className={`text-xs px-2 py-1 rounded ${getTypeColor(notification.type)} bg-opacity-20`}>
+                  {notification.type === 'live' ? '라이브' : 
+                   notification.type === 'cafe' ? '카페' : '트위터'}
+                </div>
+              </div>
+              <div className="whitespace-pre-wrap break-words leading-relaxed">
+                {(() => {
+                  const sanitized = sanitizeHtml(notification.contentHtml);
+                  return sanitized.length > 400 
+                    ? sanitized.substring(0, 400) + '\n\n...(더 보려면 클릭)'
+                    : sanitized;
+                })()}
+              </div>
+            </div>
+            {/* 글로우 효과 */}
+            <div className="absolute inset-0 rounded-xl border border-primary-400/20 shadow-lg shadow-primary-500/10" />
+            {/* 화살표 */}
+            <div 
+              className="absolute top-full left-1/2 transform -translate-x-1/2 w-0 h-0"
+              style={{
+                borderLeft: '8px solid transparent',
+                borderRight: '8px solid transparent',
+                borderTop: '8px solid rgb(17, 24, 39, 0.95)' // gray-900/95
+              }}
+            />
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div 
       ref={containerRef}
@@ -443,36 +553,36 @@ const NotificationHistory: React.FC<NotificationHistoryProps> = ({
             ) : (
               <div className="space-y-3">
                 {filteredNotifications.map((notification) => (
-                  <div
-                    key={notification.id}
-                    className="card hover-lift cursor-pointer"
-                    onClick={async () => {
-                      // 읽지않은 알림인 경우 읽음 처리
-                      if (!notification.isRead) {
-                        try {
-                          console.log('🔄 Marking notification as read:', notification.id, notification.title);
-                          
-                          // 1. 즉시 로컬 상태 업데이트 (낙관적 업데이트)
-                          const updatedNotifications = paginatedNotifications.map(n => 
-                            n.id === notification.id ? { ...n, isRead: true } : n
-                          );
-                          setPaginatedNotifications(updatedNotifications);
-                          
-                          // 2. 데이터베이스 업데이트
-                          await window.electronAPI.markNotificationRead(notification.id);
-                          
-                        } catch (error) {
-                          console.error('Failed to mark notification as read:', error);
-                          // 실패 시 데이터 다시 로드
-                          loadNotifications(currentPage, filter);
+                  <NotificationTooltip key={notification.id} notification={notification}>
+                    <div
+                      className="card hover-lift cursor-pointer"
+                      onClick={async () => {
+                        // 읽지않은 알림인 경우 읽음 처리
+                        if (!notification.isRead) {
+                          try {
+                            console.log('🔄 Marking notification as read:', notification.id, notification.title);
+                            
+                            // 1. 즉시 로컬 상태 업데이트 (낙관적 업데이트)
+                            const updatedNotifications = paginatedNotifications.map(n => 
+                              n.id === notification.id ? { ...n, isRead: true } : n
+                            );
+                            setPaginatedNotifications(updatedNotifications);
+                            
+                            // 2. 데이터베이스 업데이트
+                            await window.electronAPI.markNotificationRead(notification.id);
+                            
+                          } catch (error) {
+                            console.error('Failed to mark notification as read:', error);
+                            // 실패 시 데이터 다시 로드
+                            loadNotifications(currentPage, filter);
+                          }
                         }
-                      }
-                      
-                      if (notification.url) {
-                        window.electronAPI.openExternal(notification.url);
-                      }
-                    }}
-                  >
+                        
+                        if (notification.url) {
+                          window.electronAPI.openExternal(notification.url);
+                        }
+                      }}
+                    >
                     <div className="card-body">
                       <div className="flex items-start space-x-3">
                         {/* 읽지않은 알림 표시 */}
@@ -536,9 +646,19 @@ const NotificationHistory: React.FC<NotificationHistoryProps> = ({
                           </div>
                           
                           {notification.content && (
-                            <p className="text-sm text-gray-400 mt-1 line-clamp-2">
-                              {notification.content}
-                            </p>
+                            <div className="flex items-start space-x-2">
+                              <p className="text-sm text-gray-400 mt-1 line-clamp-2 flex-1">
+                                {notification.content}
+                              </p>
+                              {notification.contentHtml && (
+                                <div 
+                                  className="text-xs text-blue-400 mt-1 opacity-60 hover:opacity-100 transition-opacity"
+                                  title="호버하여 전체 본문 보기"
+                                >
+                                  📄
+                                </div>
+                              )}
+                            </div>
                           )}
                           
                           <div className="flex items-center mt-2 text-xs text-gray-500">
@@ -553,7 +673,8 @@ const NotificationHistory: React.FC<NotificationHistoryProps> = ({
                         </div>
                       </div>
                     </div>
-                  </div>
+                    </div>
+                  </NotificationTooltip>
                 ))}
               </div>
             )}
