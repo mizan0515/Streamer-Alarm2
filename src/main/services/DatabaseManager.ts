@@ -21,6 +21,9 @@ export class DatabaseManager {
 
   async initialize(): Promise<void> {
     try {
+      // 사용자 데이터 디렉토리 확인 및 생성
+      await this.ensureUserDataDirectory();
+      
       // 데이터베이스 연결
       this.db = new Database(this.dbPath);
       
@@ -702,6 +705,37 @@ export class DatabaseManager {
     `);
     
     return query.all() as { streamerId: number, platform: string, streamerName: string }[];
+  }
+
+  // 사용자 데이터 디렉토리 확인 및 생성
+  private async ensureUserDataDirectory(): Promise<void> {
+    const fs = require('fs').promises;
+    const userDataPath = app.getPath('userData');
+    
+    try {
+      // 디렉토리 존재 여부 및 쓰기 권한 확인
+      await fs.access(userDataPath, fs.constants.W_OK);
+    } catch (error) {
+      try {
+        // 디렉토리가 없거나 권한이 없는 경우 생성
+        await fs.mkdir(userDataPath, { recursive: true, mode: 0o755 });
+        console.log(`✅ Created user data directory: ${userDataPath}`);
+      } catch (mkdirError: any) {
+        console.error(`❌ Failed to create user data directory: ${mkdirError.message}`);
+        throw new Error(`Cannot create user data directory: ${mkdirError.message}`);
+      }
+    }
+    
+    // 데이터베이스 파일 권한 확인 (존재하는 경우)
+    const fs_sync = require('fs');
+    if (fs_sync.existsSync(this.dbPath)) {
+      try {
+        await fs.access(this.dbPath, fs.constants.R_OK | fs.constants.W_OK);
+      } catch (error) {
+        console.error(`❌ Database file permission error: ${this.dbPath}`);
+        throw new Error(`Database file is not accessible: ${this.dbPath}`);
+      }
+    }
   }
 
   // 데이터베이스 정리

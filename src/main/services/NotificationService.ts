@@ -74,17 +74,11 @@ export class NotificationService {
         this.cleanupHandlersForNotification(data.uniqueKey);
       }, 30000);
 
-      // Windows 토스트 알림 발송
+      // 크로스 플랫폼 호환 알림 발송
       const result = await new Promise<boolean>((resolve) => {
-        notifier.notify({
-          title: title, // 제목에 🐦 아리사님의 트윗 표시
-          message: message, // 본문에 실제 트윗 내용 표시
-          icon: iconPath || path.join(__dirname, '../../../assets/icon.png'),
-          wait: true,
-          timeout: 10,
-          id: data.uniqueKey,
-          actions: data.url ? ['열기'] : undefined
-        } as any, (error: any, response: any, metadata: any) => {
+        const notificationOptions = this.getNotificationOptions(data, title, message, iconPath);
+        
+        notifier.notify(notificationOptions as any, (error: any, response: any, metadata: any) => {
           if (error) {
             console.error('Notification error:', error);
             resolve(false);
@@ -419,6 +413,78 @@ export class NotificationService {
       }
     } catch (error) {
       console.error('Failed to cleanup notification cache:', error);
+    }
+  }
+
+  /**
+   * 플랫폼별 최적화된 알림 옵션 생성
+   */
+  private getNotificationOptions(
+    data: NotificationData, 
+    title: string, 
+    message: string, 
+    iconPath?: string
+  ): any {
+    const baseOptions = {
+      title: title,
+      message: message,
+      icon: iconPath || this.getDefaultIconPath(),
+      timeout: 10,
+      id: data.uniqueKey
+    };
+
+    // 플랫폼별 최적화
+    switch (process.platform) {
+      case 'win32':
+        return {
+          ...baseOptions,
+          wait: true,
+          actions: data.url ? ['열기'] : undefined,
+          appID: 'Streamer.Alarm.System'
+        };
+        
+      case 'darwin':
+        return {
+          ...baseOptions,
+          wait: true,
+          subtitle: data.streamerName,
+          sound: 'Ping',
+          contentImage: iconPath,
+          reply: false,
+          closeLabel: '닫기',
+          actions: data.url ? '열기' : undefined
+        };
+        
+      case 'linux':
+        return {
+          ...baseOptions,
+          urgency: 'normal',
+          category: 'network',
+          hint: 'string:desktop-entry:streamer-alarm-system',
+          'expire-time': 10000,
+          actions: data.url ? ['default', '열기'] : undefined
+        };
+        
+      default:
+        return baseOptions;
+    }
+  }
+
+  /**
+   * 플랫폼별 기본 아이콘 경로 반환
+   */
+  private getDefaultIconPath(): string {
+    const iconDir = path.join(__dirname, '../../../assets');
+    
+    switch (process.platform) {
+      case 'win32':
+        return path.join(iconDir, 'icon.ico');
+      case 'darwin':
+        return path.join(iconDir, 'icon.icns');
+      case 'linux':
+        return path.join(iconDir, 'icon.png');
+      default:
+        return path.join(iconDir, 'icon.png');
     }
   }
 }
