@@ -49,14 +49,8 @@ export class TrayService {
     const path = require('path');
     const { app } = require('electron');
     
-    // 다양한 가능한 아이콘 경로들
-    const possibleIconPaths = [
-      path.join(__dirname, '../../../assets/icon.png'),      // 일반적인 경로
-      path.join(__dirname, '../../assets/icon.png'),         // 기존 경로
-      path.join(process.resourcesPath, 'assets/icon.png'),   // 패키지된 앱
-      path.join(app.getAppPath(), 'assets/icon.png'),        // 앱 경로 기준
-      path.join(process.cwd(), 'assets/icon.png')            // 현재 작업 디렉토리
-    ];
+    // 플랫폼별 최적화된 아이콘 경로들
+    const possibleIconPaths = this.getPlatformIconPaths();
     
     for (const iconPath of possibleIconPaths) {
       try {
@@ -68,8 +62,9 @@ export class TrayService {
           const icon = nativeImage.createFromPath(iconPath);
           
           if (!icon.isEmpty()) {
-            // 시스템 트레이에 적합한 크기로 리사이즈 (16x16)
-            return icon.resize({ width: 16, height: 16 });
+            // 플랫폼별 최적 크기로 리사이즈
+            const iconSize = this.getOptimalIconSize();
+            return icon.resize(iconSize);
           }
         } else {
           console.log(`❌ Icon not found at: ${iconPath}`);
@@ -515,6 +510,58 @@ export class TrayService {
       console.error('❌ Failed to update menu with latest status:', error);
       // 실패 시 기본 메뉴라도 표시
       this.updateContextMenu();
+    }
+  }
+
+  /**
+   * 플랫폼별 최적 아이콘 크기 반환
+   */
+  private getOptimalIconSize(): { width: number; height: number } {
+    switch (process.platform) {
+      case 'win32':
+        return { width: 16, height: 16 };
+      case 'darwin':
+        // macOS Retina 지원을 위해 32x32 사용 (자동 스케일링)
+        return { width: 32, height: 32 };
+      case 'linux':
+        // Linux 대부분 배포판에서 22x22가 표준
+        return { width: 22, height: 22 };
+      default:
+        return { width: 16, height: 16 };
+    }
+  }
+
+  /**
+   * 플랫폼별 최적 아이콘 경로 반환
+   */
+  private getPlatformIconPaths(): string[] {
+    const baseDir = process.resourcesPath || __dirname;
+    const fallbackDir = path.join(__dirname, '../../../assets');
+    
+    switch (process.platform) {
+      case 'win32':
+        return [
+          path.join(baseDir, 'assets/icon.ico'),
+          path.join(fallbackDir, 'icon.ico'),
+          path.join(fallbackDir, 'icon.png')
+        ];
+      case 'darwin':
+        return [
+          path.join(baseDir, 'assets/icon.icns'),
+          path.join(fallbackDir, 'icon.icns'),
+          path.join(fallbackDir, 'icon.png')
+        ];
+      case 'linux':
+        return [
+          path.join(baseDir, 'assets/icon.png'),
+          path.join(fallbackDir, 'icon.png'),
+          path.join(fallbackDir, 'icon.ico')
+        ];
+      default:
+        return [
+          path.join(fallbackDir, 'icon.png'),
+          path.join(fallbackDir, 'icon.ico')
+        ];
     }
   }
 
