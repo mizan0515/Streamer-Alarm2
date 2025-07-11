@@ -200,21 +200,10 @@ export class TrayService {
 
     const contextMenu = Menu.buildFromTemplate([
       {
-        label: '웹 인터페이스 열기',
+        label: 'UI 열기',
         click: () => {
           this.app.showMainWindow();
         }
-      },
-      { type: 'separator' },
-      {
-        label: '상태 보기',
-        click: () => {
-          this.showStatusDialog(stats);
-        }
-      },
-      {
-        label: stats?.isMonitoring ? '모니터링 중' : '모니터링 중지됨',
-        enabled: false
       },
       { type: 'separator' },
       {
@@ -227,7 +216,7 @@ export class TrayService {
       {
         label: 'GitHub에서 열기',
         click: () => {
-          shell.openExternal('https://github.com/your-repo/streamer-alarm-system');
+          shell.openExternal('https://github.com/mizan0515/Streamer-Alarm2/releases/');
         }
       },
       {
