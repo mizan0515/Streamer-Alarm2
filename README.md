@@ -30,7 +30,7 @@
 
 ### 🔔 스마트 알림 시스템
 - **Windows 네이티브 토스트** - 프로필 이미지 포함 리치 알림
-- **실시간 응답** - 50ms 이내 즉시 알림 (Python v1.0 대비 96% 개선)
+- **실시간 응답** - 50ms 이내 즉시 알림
 - **개별 알림 제어** - 스트리머별 × 플랫폼별 세밀한 on/off 설정
 - **알림폭탄 방지** - 새 스트리머 등록 시 과거 게시물 자동 필터링
 
@@ -39,14 +39,6 @@
 - **네온 테마** - 보라색 그라디언트 + 동적 글로우 애니메이션
 - **반응형 레이아웃** - 모든 화면 크기 대응
 - **다크 모드** - 눈의 피로도 최소화
-
-### ⚡ 성능 개선 (vs Python v1.0)
-| 지표 | Python v1.0 | Electron v2.0 | 개선율 |
-|------|-------------|---------------|--------|
-| 메모리 사용량 | 700MB | 180MB | **74% ↓** |
-| 시작 시간 | 8초 | 2.3초 | **71% ↓** |
-| 응답 지연 | 2초 | <50ms | **96% ↓** |
-| 안정성 | 12시간 | 24시간+ | **100% ↑** |
 
 ---
 
@@ -72,17 +64,149 @@
   🗄️ SQLite DB ← 📊 상태 관리 → 🎨 React UI
 ```
 
-### 🧠 기술 스택
-**Frontend**
-- React 18 + TypeScript + Tailwind CSS
+### 🏗️ 마이크로서비스 아키텍처
 
-**Backend**
-- Electron 28 + Node.js + SQLite
-- Playwright (브라우저 자동화)
-- node-notifier (Windows 토스트)
+#### 📡 MonitoringService (핵심 오케스트레이터)
+- **역할**: 모든 모니터링 서비스 조정 및 스케줄링
+- **기능**: 
+  - 30초 주기 모니터링 루프 관리
+  - 플랫폼별 모니터 서비스 병렬 실행
+  - 절전모드 감지 및 자동 복구
+  - 오류 격리 및 재시도 로직
+- **패턴**: Promise.allSettled로 장애 격리
 
-**통신**
-- IPC Context Bridge (안전한 프로세스 간 통신)
+#### 🎯 ChzzkMonitor (CHZZK API 통합)
+- **API 엔드포인트**: `https://api.chzzk.naver.com/polling/v2/channels/{id}/live-status`
+- **기능**:
+  - 실시간 라이브 상태 감지
+  - 프로필 이미지 자동 동기화
+  - 상태 변경 감지 (오프라인 → 라이브)
+- **최적화**: HTTP 클라이언트 연결 풀링
+
+#### ☕ CafeMonitor (브라우저 자동화)
+- **엔진**: Playwright Chromium (헤드리스)
+- **세션 관리**: 
+  - 쿠키 영구 저장
+  - 자동 로그인 복구
+  - 캡챠/페이지 변경 감지
+- **스크래핑 전략**: 
+  - iframe 직접 접근
+  - 다중 셀렉터 폴백
+  - 게시물 ID 기반 중복 제거
+
+#### 🐦 TwitterMonitor (RSS 피드 파싱)
+- **데이터 소스**: Nitter 인스턴스 RSS 피드
+- **백업 전략**: 다중 인스턴스 자동 전환
+- **파싱**: HTML 태그 제거 + 텍스트 정리
+- **중복 방지**: 트윗 ID 기반 상태 추적
+
+#### 🗄️ DatabaseManager (SQLite CRUD)
+- **ACID 보장**: better-sqlite3 동기 트랜잭션
+- **스키마**: 관계형 정규화 설계
+  - `streamers` (스트리머 정보)
+  - `notification_settings` (개별 알림 설정)
+  - `notifications` (알림 기록)
+  - `monitor_states` (모니터링 상태)
+- **최적화**: 인덱스 + 준비된 문장(Prepared Statements)
+
+#### 🔔 NotificationService (알림 통합)
+- **Windows 통합**: node-notifier + Windows.UI.Notifications
+- **리치 알림**: 
+  - 프로필 이미지 80x80 최적화
+  - 클릭 액션 URL 연결
+  - 시스템 알림 센터 통합
+- **폴백 메커니즘**: 토스트 → 클립보드 → 브라우저
+
+#### ⚙️ SettingsService (설정 관리)
+- **타입 안전**: 설정 키 enum 제한
+- **동기화**: DB ↔ 시스템 설정 양방향
+- **자동 시작**: Windows 레지스트리 통합
+- **캐싱**: 메모리 캐시 + 변경 감지
+
+#### 🎭 TrayService (시스템 통합)
+- **동적 아이콘**: Canvas 기반 상태 표시 아이콘
+- **컨텍스트 메뉴**: 실시간 상태 반영
+- **크로스 플랫폼**: Windows(16x16), macOS(32x32), Linux(22x22)
+- **폴백**: 픽셀 기반 아이콘 생성
+
+### 🔗 IPC 통신 아키텍처
+
+#### Context Bridge 패턴
+```typescript
+// preload.ts - 안전한 API 노출
+contextBridge.exposeInMainWorld('electronAPI', {
+  // 스트리머 관리
+  addStreamer: (data) => ipcRenderer.invoke('add-streamer', data),
+  updateStreamer: (data) => ipcRenderer.invoke('update-streamer', data),
+  
+  // 실시간 이벤트 리스너
+  on: (channel, func) => ipcRenderer.on(channel, func),
+  removeListener: (channel, func) => ipcRenderer.removeListener(channel, func)
+});
+```
+
+#### 실시간 이벤트 시스템
+```typescript
+// Main → Renderer (실시간 업데이트)
+interface IpcEvents {
+  'streamer-data-updated': StreamerData[];      // 스트리머 정보 변경
+  'notification-received': NotificationData;    // 새 알림 수신
+  'live-status-updated': LiveStatus[];          // 라이브 상태 변경
+  'monitoring-status-changed': boolean;         // 모니터링 시작/중지
+  'settings-updated': Record<string, any>;     // 설정 변경
+}
+
+// Renderer → Main (사용자 액션)
+interface IpcHandlers {
+  'add-streamer': (data: StreamerData) => Promise<StreamerData>;
+  'test-notification': () => Promise<boolean>;
+  'naver-login': () => Promise<boolean>;
+  'update-setting': (key: string, value: any) => Promise<void>;
+}
+```
+
+### 🧠 핵심 기술 스택
+
+**Frontend (Renderer Process)**
+- **React 18**: 함수형 컴포넌트 + Hooks
+- **TypeScript 5**: 컴파일 타임 타입 안전성
+- **Tailwind CSS**: 유틸리티 퍼스트 스타일링
+- **글래스모피즘**: 커스텀 CSS 컴포넌트 시스템
+
+**Backend (Main Process)**
+- **Electron 28**: 크로스 플랫폼 데스크톱 런타임
+- **Node.js**: 비동기 이벤트 루프
+- **SQLite**: 임베디드 관계형 데이터베이스
+- **Playwright**: 브라우저 자동화 엔진
+
+**외부 통합**
+- **CHZZK API**: RESTful HTTP 통신
+- **Nitter RSS**: XML 파싱
+- **Windows APIs**: 토스트 알림, 시스템 트레이, 자동 시작
+
+### 🔐 보안 아키텍처
+
+#### 프로세스 격리
+- **Context Bridge**: 메인 ↔ 렌더러 안전한 통신
+- **nodeIntegration: false**: 렌더러에서 Node.js 접근 차단
+- **contextIsolation: true**: 격리된 컨텍스트 실행
+
+#### 데이터 보안
+- **로컬 저장**: 모든 데이터 사용자 디렉토리 암호화
+- **세션 관리**: 브라우저 세션 샌드박스 격리
+- **API 키 없음**: 공개 API만 사용하여 키 노출 위험 제거
+
+### ⚡ 성능 최적화 패턴
+
+#### 비동기 처리
+- **Promise.allSettled**: 플랫폼별 병렬 모니터링
+- **이벤트 기반**: 상태 변경 시에만 UI 업데이트
+- **연결 풀링**: HTTP 클라이언트 재사용
+
+#### 메모리 관리
+- **단일 브라우저**: Playwright 컨텍스트 공유
+- **캐시 관리**: LRU + 만료 시간 기반 자동 정리
+- **리소스 해제**: 적절한 cleanup + garbage collection
 
 ---
 
