@@ -164,10 +164,10 @@ export class ChzzkMonitor {
     const previousState = await this.databaseManager.getMonitorState(streamer.id, 'chzzk');
     const previousStatus = previousState?.lastStatus === 'live';
     
-    // 🚨 NEW: 새 스트리머 초기화 처리 (초기 라이브 상태 알림 차단)
+    // 🚨 NEW: 새 스트리머 초기화 처리 (라이브 알림은 허용, 오프라인 상태만 차단)
     const isNewStreamer = !previousState;
     if (isNewStreamer) {
-      console.log(`🆕 ${streamer.name}: 새 스트리머 감지됨 - 초기 라이브 상태 알림 차단`);
+      console.log(`🆕 ${streamer.name}: 새 스트리머 감지됨 - 라이브 상태 확인 중`);
       
       // 현재 상태를 데이터베이스에 저장 (초기화 상태로)
       await this.databaseManager.setMonitorState(
@@ -180,8 +180,13 @@ export class ChzzkMonitor {
       // 메모리 캐시도 업데이트
       this.previousLiveStatus.set(streamer.id.toString(), currentStatus.isLive);
       
-      console.log(`🆕 ${streamer.name}: 초기 라이브 상태 "${currentStatus.isLive ? 'live' : 'offline'}" 설정 완료`);
-      return; // 새 스트리머는 알림 전송 안함
+      if (currentStatus.isLive) {
+        console.log(`🎉 ${streamer.name}: 새 스트리머 라이브 중 감지 - 라이브 알림 허용`);
+        // 라이브 중이라면 알림 허용 (아래로 진행)
+      } else {
+        console.log(`🆕 ${streamer.name}: 새 스트리머 오프라인 상태로 초기화 완료`);
+        return; // 오프라인 상태는 알림 차단
+      }
     }
     
     // 상태가 변경되었고, 라이브가 시작된 경우에만 알림 발송
@@ -204,16 +209,18 @@ export class ChzzkMonitor {
       }
     }
 
-    // 현재 상태를 데이터베이스에 저장
-    await this.databaseManager.setMonitorState(
-      streamer.id,
-      'chzzk',
-      currentStatus.isLive ? (currentStatus.url || '') : undefined,
-      currentStatus.isLive ? 'live' : 'offline'
-    );
+    // 기존 스트리머의 경우에만 상태 저장 (새 스트리머는 이미 위에서 저장됨)
+    if (!isNewStreamer) {
+      await this.databaseManager.setMonitorState(
+        streamer.id,
+        'chzzk',
+        currentStatus.isLive ? (currentStatus.url || '') : undefined,
+        currentStatus.isLive ? 'live' : 'offline'
+      );
 
-    // 메모리 캐시도 업데이트 (호환성 유지)
-    this.previousLiveStatus.set(streamer.id.toString(), currentStatus.isLive);
+      // 메모리 캐시도 업데이트 (호환성 유지)
+      this.previousLiveStatus.set(streamer.id.toString(), currentStatus.isLive);
+    }
   }
 
   async getProfileImage(chzzkId: string): Promise<string | null> {
