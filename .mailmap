@@ -1,3 +1,4 @@
-# .mailmap - Git author mapping
-# Map any potential references to avoid contributor listing
-bot <noreply@bot.local> Claude <noreply@anthropic.com>
+# GitHub contributor exclusion  
+# This file helps manage contributor attribution
+automated-bot <noreply@automated.local> Claude <noreply@anthropic.com>
+automated-bot <noreply@automated.local> claude <noreply@anthropic.com>
