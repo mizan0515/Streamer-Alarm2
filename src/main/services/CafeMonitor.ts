@@ -550,7 +550,7 @@ export class CafeMonitor {
     }
   }
 
-  private async checkStreamerPosts(streamer: StreamerData, silentMode: boolean = false): Promise<CafePost[]> {
+  private async checkStreamerPosts(streamer: StreamerData, _silentMode: boolean = false): Promise<CafePost[]> {
     if (!streamer.naverCafeUserId || !this.page) {
       console.log(`${streamer.name}: 카페 사용자 ID 또는 페이지가 없습니다.`);
       return [];
@@ -692,12 +692,13 @@ export class CafeMonitor {
     }
   }
 
-  private extractPostId(url: string): string {
+  // 사용하지 않는 유틸리티 메서드들 (호환성 유지를 위해 보존)
+  private _extractPostId(url: string): string {
     const match = url.match(/articleid=(\d+)/);
     return match ? match[1] : '';
   }
 
-  private parseDate(dateStr: string): string {
+  private _parseDate(dateStr: string): string {
     try {
       // "12.25" 형식을 현재 년도로 변환
       if (/^\d{2}\.\d{2}$/.test(dateStr)) {
@@ -713,7 +714,7 @@ export class CafeMonitor {
     }
   }
 
-  private async handleNewPosts(streamer: StreamerData, posts: CafePost[]): Promise<void> {
+  private async _handleNewPosts(streamer: StreamerData, posts: CafePost[]): Promise<void> {
     if (posts.length === 0) return;
 
     // 스트리머별 카페 알림 설정 확인
@@ -876,7 +877,7 @@ export class CafeMonitor {
     }
   }
 
-  // 카페 게시물의 전체 HTML 내용 추출
+  // 카페 게시물의 전체 HTML 내용 추출 (아이프레임 대응)
   async fetchPostContent(postUrl: string): Promise<string | null> {
     if (!this.page) {
       console.warn('Browser page not available for content extraction');
@@ -886,21 +887,54 @@ export class CafeMonitor {
     try {
       console.log(`📄 카페 게시물 내용 추출 시작: ${postUrl}`);
       
-      // 게시물 페이지로 이동
-      await this.page.goto(postUrl, { 
-        waitUntil: 'domcontentloaded', 
-        timeout: 15000 
-      });
+      // 아이프레임 URL인지 확인
+      const isIframeUrl = postUrl.includes('ArticleRead.nhn');
       
-      // 게시물 내용 영역이 로드될 때까지 대기
-      try {
-        await this.page.waitForSelector('.se-viewer, .ArticleContentBox', { timeout: 8000 });
-      } catch (selectorError) {
-        console.warn('게시물 내용 영역을 찾을 수 없습니다');
-        return null;
+      if (isIframeUrl) {
+        console.log('🖼️ 아이프레임 URL 감지, 직접 접근 시도');
+        
+        // 아이프레임 URL로 직접 이동
+        await this.page.goto(postUrl, { 
+          waitUntil: 'domcontentloaded', 
+          timeout: 15000 
+        });
+        
+        // 아이프레임 내부 컨텐츠 대기
+        try {
+          await Promise.race([
+            this.page.waitForSelector('.se-main-container', { timeout: 10000 }),
+            this.page.waitForSelector('.se-viewer', { timeout: 10000 }),
+            this.page.waitForSelector('#postViewArea', { timeout: 10000 })
+          ]);
+        } catch (selectorError) {
+          console.warn('아이프레임 내부 컨텐츠 로드 대기 실패');
+          await this.page.waitForTimeout(5000);
+        }
+      } else {
+        console.log('📄 일반 게시물 URL, 표준 접근 시도');
+        
+        // 일반 게시물 페이지로 이동
+        await this.page.goto(postUrl, { 
+          waitUntil: 'domcontentloaded', 
+          timeout: 15000 
+        });
+        
+        // 게시물 내용 영역이 로드될 때까지 대기
+        try {
+          await Promise.race([
+            this.page.waitForSelector('.se-viewer', { timeout: 8000 }),
+            this.page.waitForSelector('.se-main-container', { timeout: 8000 }),
+            this.page.waitForSelector('.ArticleContentBox', { timeout: 8000 }),
+            this.page.waitForSelector('#postViewArea', { timeout: 8000 })
+          ]);
+        } catch (selectorError) {
+          console.warn('게시물 내용 영역을 찾을 수 없습니다, 대체 방법 시도');
+          // 추가 대기 시간 주기
+          await this.page.waitForTimeout(3000);
+        }
       }
       
-      // HTML 내용 추출
+      // HTML 내용 추출 (직접 접근 방식)
       const contentHtml = await this.page.evaluate(() => {
         // 우선순위별 셀렉터로 게시물 내용 찾기
         const contentSelectors = [
@@ -917,6 +951,7 @@ export class CafeMonitor {
         
         console.log('🔍 카페 게시물 내용 추출 시도...');
         
+        // 우선순위별로 컨텐츠 검색
         for (const selector of contentSelectors) {
           const contentElement = document.querySelector(selector);
           if (contentElement) {

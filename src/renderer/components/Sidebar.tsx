@@ -15,7 +15,8 @@ interface Settings {
 
 const Sidebar: React.FC<SidebarProps> = ({ stats, onNaverActionStart, onNaverActionEnd }) => {
   const location = useLocation();
-  const [settings, setSettings] = useState<Settings>({ needNaverLogin: true });
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const [isLoadingSettings, setIsLoadingSettings] = useState(true);
 
   // 설정 변경 이벤트 리스너
   useEffect(() => {
@@ -28,44 +29,35 @@ const Sidebar: React.FC<SidebarProps> = ({ stats, onNaverActionStart, onNaverAct
         }
       } catch (error) {
         console.error('Failed to load settings:', error);
+      } finally {
+        setIsLoadingSettings(false);
       }
     };
 
     loadSettings();
 
-    // 설정 업데이트 리스너
+    // 통합된 설정 업데이트 리스너
     const handleSettingsUpdate = (newSettings: Settings) => {
       console.log('🔄 Sidebar: Settings updated', newSettings);
       setSettings(newSettings);
-    };
-
-    // 네이버 로그인 상태 변경 리스너
-    const handleLoginStatusChange = (status: { needLogin: boolean }) => {
-      console.log('🔄 Sidebar: Login status changed:', status);
-      setSettings(prev => ({ ...prev, needNaverLogin: status.needLogin }));
+      setIsLoadingSettings(false);
     };
 
     // 이벤트 리스너 등록
     if (window.electronAPI?.on) {
       window.electronAPI.on('settings-updated', handleSettingsUpdate);
     }
-    if (window.electronAPI?.onNaverLoginStatusChanged) {
-      window.electronAPI.onNaverLoginStatusChanged(handleLoginStatusChange);
-    }
 
     // 컴포넌트 언마운트 시 리스너 해제
     return () => {
-      if (window.electronAPI?.removeAllListeners) {
-        window.electronAPI.removeAllListeners('settings-updated');
-      }
       if (window.electronAPI?.removeListener) {
-        window.electronAPI.removeListener('naver-login-status-changed', handleLoginStatusChange);
+        window.electronAPI.removeListener('settings-updated', handleSettingsUpdate);
       }
     };
   }, []);
 
   const handleNaverAction = async () => {
-    if (settings.needNaverLogin !== false) {
+    if (settings?.needNaverLogin === true) {
       console.log('🔐 Naver login button clicked');
       onNaverActionStart?.();
       try {
@@ -238,17 +230,25 @@ const Sidebar: React.FC<SidebarProps> = ({ stats, onNaverActionStart, onNaverAct
         <div className="mb-2">
           <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">빠른 액션</h3>
         </div>
-        <button
-          onClick={handleNaverAction}
-          className={`w-full text-xs ${
-            settings.needNaverLogin !== false 
-              ? 'btn btn-warning btn-sm' 
-              : 'btn-subtle'
-          }`}
-          title={settings.needNaverLogin !== false ? "네이버 로그인 필요" : "네이버 로그아웃"}
-        >
-          {settings.needNaverLogin !== false ? '🔐 네이버 로그인' : '🚪 로그아웃'}
-        </button>
+        {isLoadingSettings ? (
+          <div className="w-full text-xs btn btn-ghost btn-sm cursor-not-allowed">
+            <span className="spinner spinner-sm mr-1"></span>
+            설정 로드 중...
+          </div>
+        ) : (
+          <button
+            onClick={handleNaverAction}
+            className={`w-full text-xs ${
+              settings?.needNaverLogin === true 
+                ? 'btn btn-warning btn-sm' 
+                : 'btn-subtle'
+            }`}
+            title={settings?.needNaverLogin === true ? "네이버 로그인 필요" : "네이버 로그아웃"}
+            disabled={isLoadingSettings}
+          >
+            {settings?.needNaverLogin === true ? '🔐 네이버 로그인' : '🚪 로그아웃'}
+          </button>
+        )}
       </div>
 
       {/* 앱 정보 */}

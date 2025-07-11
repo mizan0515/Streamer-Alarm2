@@ -1,6 +1,6 @@
 import { DatabaseManager } from './DatabaseManager';
 import { SettingKey } from '@shared/types';
-import { BrowserWindow } from 'electron';
+import { BrowserWindow, app } from 'electron';
 import { TrayService } from './TrayService';
 
 export class SettingsService {
@@ -35,6 +35,11 @@ export class SettingsService {
     const stringValue = String(value);
     await this.databaseManager.setSetting(key, stringValue);
     this.settingsCache[key] = stringValue;
+    
+    // Windows 자동 시작 설정 처리
+    if (key === 'autoStart') {
+      await this.updateAutoStart(value === true || value === 'true');
+    }
     
     // 모든 설정 정보 가져오기
     const allSettings = await this.getAllSettings();
@@ -138,5 +143,100 @@ export class SettingsService {
 
   getNeedNaverLogin(): boolean {
     return this.getSetting('needNaverLogin') === 'true';
+  }
+
+  /**
+   * Windows 자동 시작 설정 업데이트
+   */
+  private async updateAutoStart(enable: boolean): Promise<void> {
+    try {
+      console.log(`🚀 Setting Windows auto-start: ${enable}`);
+      
+      // 개발 환경에서는 자동 시작 기능을 건너뜀
+      if (process.env.NODE_ENV === 'development') {
+        console.log('⚠️ Skipping auto-start in development mode');
+        return;
+      }
+      
+      // 현재 자동 시작 상태 확인
+      const currentSettings = app.getLoginItemSettings();
+      console.log('Current login item settings:', currentSettings);
+      
+      if (enable) {
+        // 자동 시작 활성화
+        const appPath = process.execPath;
+        console.log(`App path: ${appPath}`);
+        
+        app.setLoginItemSettings({
+          openAtLogin: true,
+          openAsHidden: true, // 백그라운드에서 시작
+          name: 'Streamer Alarm System',
+          path: appPath, // 실행 파일 경로 명시
+          args: ['--auto-start'], // 자동 시작 플래그 추가
+        });
+        console.log('✅ Auto-start enabled');
+      } else {
+        // 자동 시작 비활성화
+        app.setLoginItemSettings({
+          openAtLogin: false
+        });
+        console.log('❌ Auto-start disabled');
+      }
+      
+      // 설정 후 상태 확인
+      const updatedSettings = app.getLoginItemSettings();
+      console.log('Updated login item settings:', updatedSettings);
+      
+      // Windows에서는 추가 검증
+      if (process.platform === 'win32') {
+        const finalCheck = app.getLoginItemSettings();
+        if (finalCheck.openAtLogin !== enable) {
+          console.warn(`⚠️ Auto-start setting mismatch: expected ${enable}, got ${finalCheck.openAtLogin}`);
+        }
+      }
+      
+    } catch (error) {
+      console.error('❌ Failed to update auto-start setting:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 현재 Windows 자동 시작 상태 확인
+   */
+  isAutoStartEnabled(): boolean {
+    try {
+      // 개발 환경에서는 DB 설정만 반환
+      if (process.env.NODE_ENV === 'development') {
+        return this.getAutoStart();
+      }
+      
+      const settings = app.getLoginItemSettings();
+      console.log('🔍 Current login item settings:', settings);
+      return settings.openAtLogin;
+    } catch (error) {
+      console.error('Failed to get auto-start status:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 앱 시작 시 자동 시작 설정 동기화
+   */
+  async syncAutoStartSetting(): Promise<void> {
+    try {
+      const systemAutoStart = this.isAutoStartEnabled();
+      const dbAutoStart = this.getAutoStart();
+      
+      console.log(`🔄 Syncing auto-start: system=${systemAutoStart}, db=${dbAutoStart}`);
+      
+      // 시스템 설정과 DB 설정이 다르면 DB 설정을 따름
+      if (systemAutoStart !== dbAutoStart) {
+        console.log(`Syncing auto-start from DB setting: ${dbAutoStart}`);
+        await this.updateAutoStart(dbAutoStart);
+      }
+    } catch (error) {
+      console.error('Failed to sync auto-start setting:', error);
+    }
   }
 }

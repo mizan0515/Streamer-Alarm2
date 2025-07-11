@@ -17,7 +17,7 @@ const AddStreamerForm: React.FC<AddStreamerFormProps> = ({
     chzzkId: '',
     twitterUsername: '',
     naverCafeUserId: '',
-    cafeClubId: '30919539',
+    cafeClubId: '',
     profileImageUrl: '',
     isActive: true,
     notifications: {
@@ -162,9 +162,12 @@ const AddStreamerForm: React.FC<AddStreamerFormProps> = ({
                   value={formData.cafeClubId}
                   onChange={(e) => handleInputChange('cafeClubId', e.target.value)}
                   className="input"
-                  placeholder="예: 30919539"
+                  placeholder="예: 30919539 (스트리머가 활동하는 카페의 클럽 ID)"
                   disabled={isLoading}
                 />
+                <p className="text-xs text-gray-400 mt-1">
+                  💡 카페 URL에서 확인: cafe.naver.com/ca-fe/cafes/<strong>클럽ID</strong>/...
+                </p>
               </div>
 
               {errors.platforms && (
