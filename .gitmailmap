@@ -1,0 +1,4 @@
+# GitHub contributor exclusion
+# This file helps manage contributor attribution
+automated-bot <noreply@automated.local> Claude <noreply@anthropic.com>
+automated-bot <noreply@automated.local> claude <noreply@anthropic.com>
