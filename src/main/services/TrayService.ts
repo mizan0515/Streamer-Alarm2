@@ -90,47 +90,66 @@ export class TrayService {
   }
 
   private createPixelIcon(): Electron.NativeImage {
-    // 16x16 RGBA 바이트 배열로 간단한 TV 아이콘 생성
-    const width = 16;
-    const height = 16;
+    // 플랫폼별 최적 크기 사용
+    const iconSize = this.getOptimalIconSize();
+    const { width, height } = iconSize;
     const buffer = Buffer.alloc(width * height * 4); // RGBA
     
-    // 픽셀 색상 정의
-    const red = [255, 68, 68, 255];    // #ff4444
-    const white = [255, 255, 255, 255]; // #ffffff
-    const black = [0, 0, 0, 255];       // #000000
-    const transparent = [0, 0, 0, 0];   // 투명
+    // 픽셀 색상 정의 (Windows 트레이에 적합한 색상)
+    const darkBlue = [64, 81, 181, 255];    // #4051b5 (Material Blue)
+    const lightBlue = [144, 164, 255, 255]; // #90a4ff (Light Blue)
+    const white = [255, 255, 255, 255];     // #ffffff
+    const transparent = [0, 0, 0, 0];       // 투명
     
-    // 16x16 TV 모양 패턴 (간단한 비트맵)
-    const pattern = [
-      [0,0,0,0,0,0,1,1,1,1,0,0,0,0,0,0], // 안테나
-      [0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0],
-      [0,0,1,1,1,1,1,1,1,1,1,1,1,1,0,0], // TV 상단
-      [0,0,1,2,2,2,2,2,2,2,2,2,2,1,0,0], // TV 테두리
-      [0,0,1,2,3,3,3,3,3,3,3,3,2,1,0,0], // 스크린 시작
-      [0,0,1,2,3,3,3,3,3,3,3,3,2,1,0,0],
-      [0,0,1,2,3,3,3,3,3,3,3,3,2,1,0,0],
-      [0,0,1,2,3,3,3,3,3,3,3,3,2,1,0,0],
-      [0,0,1,2,3,3,3,3,3,3,3,3,2,1,0,0],
-      [0,0,1,2,3,3,3,3,3,3,3,3,2,1,0,0],
-      [0,0,1,2,3,3,3,3,3,3,3,3,2,1,0,0], // 스크린 끝
-      [0,0,1,2,2,2,2,2,2,2,2,2,2,1,0,0], // TV 하단
+    // 스케일 팩터 계산 (16x16 기준 패턴을 다른 크기로 스케일링)
+    const scale = Math.min(width / 16, height / 16);
+    const scaledSize = Math.round(16 * scale);
+    
+    // 중앙 정렬을 위한 오프셋
+    const offsetX = Math.round((width - scaledSize) / 2);
+    const offsetY = Math.round((height - scaledSize) / 2);
+    
+    // 16x16 기준 패턴 (모니터 아이콘)
+    const basePattern = [
+      [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
       [0,0,1,1,1,1,1,1,1,1,1,1,1,1,0,0],
-      [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-      [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+      [0,0,1,2,2,2,2,2,2,2,2,2,2,1,0,0],
+      [0,0,1,2,3,3,3,3,3,3,3,3,2,1,0,0],
+      [0,0,1,2,3,3,3,3,3,3,3,3,2,1,0,0],
+      [0,0,1,2,3,3,3,3,3,3,3,3,2,1,0,0],
+      [0,0,1,2,3,3,3,3,3,3,3,3,2,1,0,0],
+      [0,0,1,2,3,3,3,3,3,3,3,3,2,1,0,0],
+      [0,0,1,2,3,3,3,3,3,3,3,3,2,1,0,0],
+      [0,0,1,2,3,3,3,3,3,3,3,3,2,1,0,0],
+      [0,0,1,2,2,2,2,2,2,2,2,2,2,1,0,0],
+      [0,0,1,1,1,1,1,1,1,1,1,1,1,1,0,0],
+      [0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0],
+      [0,0,0,0,0,0,1,1,1,1,0,0,0,0,0,0],
+      [0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0],
       [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
     ];
     
+    // 버퍼 초기화 (투명 배경)
+    buffer.fill(0);
+    
+    // 패턴을 실제 크기로 그리기
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         const pixelIndex = (y * width + x) * 4;
+        
+        // 스케일링된 좌표로 변환
+        const baseX = Math.floor((x - offsetX) / scale);
+        const baseY = Math.floor((y - offsetY) / scale);
+        
         let color = transparent;
         
-        switch (pattern[y][x]) {
-          case 1: color = white; break;   // TV 테두리
-          case 2: color = red; break;     // TV 몸체
-          case 3: color = black; break;   // 스크린
-          default: color = transparent;   // 배경
+        if (baseX >= 0 && baseX < 16 && baseY >= 0 && baseY < 16) {
+          switch (basePattern[baseY][baseX]) {
+            case 1: color = white; break;      // 테두리
+            case 2: color = darkBlue; break;   // 몸체
+            case 3: color = lightBlue; break;  // 스크린
+            default: color = transparent;      // 배경
+          }
         }
         
         buffer[pixelIndex] = color[0];     // R
@@ -140,6 +159,7 @@ export class TrayService {
       }
     }
     
+    console.log(`✅ Created pixel icon with size ${width}x${height}`);
     return nativeImage.createFromBuffer(buffer, { width, height });
   }
 
@@ -532,37 +552,53 @@ export class TrayService {
   }
 
   /**
-   * 플랫폼별 최적 아이콘 경로 반환
+   * 플랫폼별 최적 아이콘 경로 반환 (프로덕션 빌드 대응)
    */
   private getPlatformIconPaths(): string[] {
-    const baseDir = process.resourcesPath || __dirname;
-    const fallbackDir = path.join(__dirname, '../../../assets');
+    const { app } = require('electron');
     
-    switch (process.platform) {
-      case 'win32':
-        return [
-          path.join(baseDir, 'assets/icon.ico'),
-          path.join(fallbackDir, 'icon.ico'),
-          path.join(fallbackDir, 'icon.png')
-        ];
-      case 'darwin':
-        return [
-          path.join(baseDir, 'assets/icon.icns'),
-          path.join(fallbackDir, 'icon.icns'),
-          path.join(fallbackDir, 'icon.png')
-        ];
-      case 'linux':
-        return [
-          path.join(baseDir, 'assets/icon.png'),
-          path.join(fallbackDir, 'icon.png'),
-          path.join(fallbackDir, 'icon.ico')
-        ];
-      default:
-        return [
-          path.join(fallbackDir, 'icon.png'),
-          path.join(fallbackDir, 'icon.ico')
-        ];
+    // 프로덕션 빌드에서 리소스 경로
+    const resourcesPath = process.resourcesPath || app.getAppPath();
+    
+    // 개발 환경과 프로덕션 환경 구분
+    const isDev = process.env.NODE_ENV === 'development';
+    
+    let basePaths: string[] = [];
+    
+    if (isDev) {
+      // 개발 환경: 소스 기준 경로
+      basePaths = [
+        path.join(__dirname, '../../../assets'),
+        path.join(__dirname, '../../../build/assets'),
+        path.join(__dirname, '../../assets')
+      ];
+    } else {
+      // 프로덕션 환경: 패키징된 앱 기준 경로
+      basePaths = [
+        path.join(resourcesPath, 'assets'),
+        path.join(resourcesPath, 'app.asar.unpacked/assets'),
+        path.join(resourcesPath, 'app/assets'),
+        path.join(resourcesPath, 'app.asar/assets'),
+        path.join(process.cwd(), 'assets')
+      ];
     }
+    
+    const iconFiles = process.platform === 'win32' 
+      ? ['icon.ico', 'icon.png', 'app.ico'] 
+      : process.platform === 'darwin'
+      ? ['icon.icns', 'icon.png', 'app.icns']
+      : ['icon.png', 'icon.ico'];
+    
+    // 모든 경로 조합 생성
+    const allPaths: string[] = [];
+    for (const basePath of basePaths) {
+      for (const iconFile of iconFiles) {
+        allPaths.push(path.join(basePath, iconFile));
+      }
+    }
+    
+    console.log('🔍 Searching for icons in paths:', allPaths);
+    return allPaths;
   }
 
   destroy(): void {

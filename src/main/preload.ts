@@ -84,7 +84,10 @@ const electronAPI = {
   getPlatform: () => process.platform,
   
   // 개발 환경 감지
-  isDev: () => process.env.NODE_ENV === 'development'
+  isDev: () => process.env.NODE_ENV === 'development',
+  
+  // 자동 시작 디버깅
+  getAutoStartDebug: () => ipcRenderer.invoke('get-auto-start-debug')
 };
 
 // Context Bridge를 통해 안전하게 API 노출

@@ -76,7 +76,12 @@
       "package.json"
     ],
     "extraFiles": [],
-    "extraResources": [],
+    "extraResources": [
+      {
+        "from": "assets/",
+        "to": "assets/"
+      }
+    ],
     "asarUnpack": [
       "node_modules/better-sqlite3/**/*",
       "node_modules/node-addon-api/**/*",

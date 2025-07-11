@@ -37,9 +37,30 @@ class StreamerAlarmApp {
   async initialize(): Promise<void> {
     console.log('Starting app initialization...');
     
+    // 🚨 중복 실행 방지 (Single Instance Lock)
+    const gotTheLock = app.requestSingleInstanceLock();
+    
+    if (!gotTheLock) {
+      console.log('⚠️ Application is already running. Exiting...');
+      app.quit();
+      return;
+    }
+    
+    // 두 번째 인스턴스 실행 시 기존 창을 활성화
+    app.on('second-instance', (event, commandLine, workingDirectory) => {
+      console.log('🔄 Second instance detected, showing existing window');
+      if (this.mainWindow) {
+        if (this.mainWindow.isMinimized()) {
+          this.mainWindow.restore();
+        }
+        this.mainWindow.focus();
+        this.mainWindow.show();
+      }
+    });
+    
     // 앱 준비 대기
     await app.whenReady();
-    console.log('Electron app ready');
+    console.log('Electron app ready (Single Instance)');
 
     // 데이터베이스 초기화
     try {
@@ -309,11 +330,29 @@ class StreamerAlarmApp {
 
     // 설정 관련 IPC
     ipcMain.handle('get-settings', async () => {
-      return await this.settingsService.getAllSettings();
+      const settings = await this.settingsService.getAllSettings();
+      
+      // 시스템의 실제 자동 시작 상태도 함께 반환
+      const systemAutoStart = this.settingsService.isAutoStartEnabled();
+      
+      return {
+        ...settings,
+        autoStart: systemAutoStart // 시스템 상태로 덮어쓰기
+      };
     });
 
     ipcMain.handle('update-setting', async (_, { key, value }) => {
-      return await this.settingsService.updateSetting(key, value);
+      console.log(`🔧 IPC: Updating setting ${key} to ${value}`);
+      await this.settingsService.updateSetting(key, value);
+      
+      // 자동 시작 설정이 변경된 경우 즉시 동기화
+      if (key === 'autoStart') {
+        console.log('🚀 Auto-start setting changed, syncing...');
+        const systemEnabled = this.settingsService.isAutoStartEnabled();
+        console.log(`System auto-start status after update: ${systemEnabled}`);
+      }
+      
+      return true;
     });
 
     // 모니터링 관련 IPC
@@ -353,6 +392,28 @@ class StreamerAlarmApp {
 
     ipcMain.handle('quit-app', async () => {
       this.quit();
+    });
+
+    // 자동 시작 디버깅용 IPC
+    ipcMain.handle('get-auto-start-debug', async () => {
+      try {
+        const settings = app.getLoginItemSettings();
+        const dbAutoStart = this.settingsService.getAutoStart();
+        const systemAutoStart = this.settingsService.isAutoStartEnabled();
+        
+        return {
+          systemSettings: settings,
+          dbAutoStart: dbAutoStart,
+          systemAutoStart: systemAutoStart,
+          execPath: process.execPath,
+          platform: process.platform,
+          isDev: process.env.NODE_ENV === 'development',
+          args: process.argv
+        };
+      } catch (error) {
+        console.error('Failed to get auto-start debug info:', error);
+        return { error: error instanceof Error ? error.message : String(error) };
+      }
     });
 
     // 스트리머 검색 IPC
@@ -465,12 +526,24 @@ class StreamerAlarmApp {
   }
 
   private async checkAutoStart(): Promise<void> {
-    const autoStart = this.settingsService.getSetting('autoStart');
-    if (autoStart === 'true') {
-      app.setLoginItemSettings({
-        openAtLogin: true,
-        args: ['--hidden']
-      });
+    try {
+      console.log('🚀 Checking and syncing auto-start settings...');
+      
+      // 설정 서비스의 동기화 메서드 호출
+      await this.settingsService.syncAutoStartSetting();
+      
+      // 자동 시작으로 실행된 경우 최소화 상태로 시작
+      const isAutoStarted = process.argv.includes('--auto-start') || process.argv.includes('--hidden');
+      if (isAutoStarted) {
+        console.log('🔄 App started via auto-start, hiding window');
+        if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+          this.mainWindow.hide();
+        }
+      }
+      
+      console.log('✅ Auto-start settings synced successfully');
+    } catch (error) {
+      console.error('❌ Failed to check auto-start settings:', error);
     }
   }
 
