@@ -44,6 +44,8 @@
 
 ## 🏗️ 아키텍처
 
+<img width="600" alt="Image" src="https://github.com/user-attachments/assets/72a7736b-fdc6-4e27-94c1-86bf57e3563c" />
+
 ### 📊 시스템 구조
 ```
 🏢 Streamer Alarm System v2.0
