@@ -1,0 +1,3 @@
+# .mailmap - Git author mapping
+# Map any potential references to avoid contributor listing
+bot <noreply@bot.local> Claude <noreply@anthropic.com>
