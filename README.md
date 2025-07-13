@@ -267,7 +267,7 @@ streamer-alarm2/
 ### 📦 Windows 사용자용 설치
 
 #### **🚀 설치형 (추천)**
-1. [Releases 페이지](https://github.com/mizan0515/Streamer-Alarm2/releases)에서 `Streamer.Alarm.System.Setup.2.0.4.exe` 다운로드
+1. [Releases 페이지](https://github.com/mizan0515/Streamer-Alarm2/releases)에서 `Streamer.Alarm.System.Setup.2.0.5.exe` 다운로드
 2. 설치 프로그램 실행 → Playwright 브라우저 자동 설치
 3. 윈도우 앱 검색에서 "Streamer Alarm System" 실행
 4. 바로 사용 가능 ✅
