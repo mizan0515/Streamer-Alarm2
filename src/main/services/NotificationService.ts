@@ -13,9 +13,11 @@ export class NotificationService {
   private databaseManager: DatabaseManager;
   private settingsService: SettingsService;
   private tempDir: string;
-  private activeHandlers: Map<string, { click: (...args: any[]) => void; action: (...args: any[]) => void }> = new Map();
+  private activeNotifications: Map<string, NotificationData> = new Map(); // 활성 알림 데이터 저장
+  private globalHandlersInitialized: boolean = false;
 
   constructor(databaseManager: DatabaseManager) {
+    console.log(`[DEBUG] NotificationService constructor called`);
     this.databaseManager = databaseManager;
     this.settingsService = new SettingsService(databaseManager);
     
@@ -23,6 +25,11 @@ export class NotificationService {
     const os = require('os');
     this.tempDir = path.join(os.tmpdir(), 'streamer-alarm-profiles');
     this.ensureTempDirectory();
+    
+    // 글로벌 이벤트 핸들러 설정
+    console.log(`[DEBUG] About to setup global event handlers...`);
+    this.setupGlobalEventHandlers();
+    console.log(`[DEBUG] NotificationService constructor completed`);
   }
 
   private ensureTempDirectory(): void {
@@ -31,11 +38,242 @@ export class NotificationService {
     }
   }
 
+  /**
+   * 단일 글로벌 핸들러 설정
+   * 모든 notification 이벤트를 하나의 핸들러로 처리
+   */
+  private setupGlobalEventHandlers(): void {
+    if (this.globalHandlersInitialized) {
+      console.log(`[DEBUG] Global handlers already initialized, skipping`);
+      return;
+    }
+
+    console.log(`[DEBUG] ===== SETTING UP GLOBAL NOTIFICATION HANDLERS =====`);
+    console.log(`[DEBUG] Platform: ${process.platform}`);
+    console.log(`[DEBUG] node-notifier version: ${require('node-notifier/package.json').version}`);
+    
+    try {
+      // 글로벌 클릭 핸들러 - 한 번만 등록
+      notifier.on('click', async (...args: any[]) => {
+        console.log(`[GLOBAL_CLICK] *** CLICK EVENT DETECTED ***`);
+        console.log(`[GLOBAL_CLICK] Arguments:`, args);
+        console.log(`[GLOBAL_CLICK] Active notifications count: ${this.activeNotifications.size}`);
+        await this.handleGlobalClick(...args);
+      });
+      console.log(`[DEBUG] ✅ Click handler registered successfully`);
+
+      // 글로벌 액션 핸들러 - 한 번만 등록  
+      notifier.on('action', async (...args: any[]) => {
+        console.log(`[GLOBAL_ACTION] *** ACTION EVENT DETECTED ***`);
+        console.log(`[GLOBAL_ACTION] Arguments:`, args);
+        await this.handleGlobalAction(...args);
+      });
+      console.log(`[DEBUG] ✅ Action handler registered successfully`);
+
+      // 기타 이벤트들 (완전한 디버깅)
+      notifier.on('timeout', (...args: any[]) => {
+        console.log(`[GLOBAL_TIMEOUT] Timeout event:`, args);
+      });
+      
+      notifier.on('close', (...args: any[]) => {
+        console.log(`[GLOBAL_CLOSE] Close event:`, args);
+      });
+      
+      notifier.on('fail', (...args: any[]) => {
+        console.log(`[GLOBAL_FAIL] Fail event:`, args);
+      });
+
+      // 모든 이벤트 캐치 (디버깅용)
+      notifier.on('*', (...args: any[]) => {
+        console.log(`[GLOBAL_WILDCARD] Unknown event detected:`, args);
+      });
+
+      console.log(`[DEBUG] ✅ All handlers registered successfully`);
+      
+      this.globalHandlersInitialized = true;
+      
+      // 핸들러 등록 확인을 위한 즉시 테스트
+      console.log(`[DEBUG] Testing handler registration...`);
+      console.log(`[DEBUG] notifier.listenerCount('click'): ${notifier.listenerCount('click')}`);
+      console.log(`[DEBUG] notifier.listenerCount('action'): ${notifier.listenerCount('action')}`);
+      
+      console.log(`[DEBUG] ===== GLOBAL HANDLERS INITIALIZATION COMPLETE =====`);
+    } catch (error) {
+      console.error(`[ERROR] Failed to setup global handlers:`, error);
+      this.globalHandlersInitialized = false;
+    }
+  }
+
+  /**
+   * 글로벌 클릭 이벤트 처리
+   */
+  private async handleGlobalClick(...args: any[]): Promise<void> {
+    try {
+      console.log(`[GLOBAL_CLICK] Processing click event with ${args.length} arguments`);
+      
+      // 가장 최근에 등록된 알림을 우선 처리
+      const recentNotification = this.getMostRecentNotification();
+      
+      if (recentNotification) {
+        console.log(`[GLOBAL_CLICK] Opening URL for recent notification: ${recentNotification.uniqueKey}`);
+        
+        if (recentNotification.url) {
+          await shell.openExternal(recentNotification.url);
+          console.log(`[GLOBAL_CLICK] Successfully opened URL: ${recentNotification.url}`);
+          
+          // 알림을 읽음 처리
+          await this.markNotificationAsReadByUniqueKey(recentNotification.uniqueKey);
+          
+          // 처리된 알림은 활성 목록에서 제거
+          this.activeNotifications.delete(recentNotification.uniqueKey);
+        }
+      } else {
+        console.log(`[GLOBAL_CLICK] No active notifications found to process`);
+      }
+    } catch (error) {
+      console.error(`[GLOBAL_CLICK] Error processing click:`, error);
+    }
+  }
+
+  /**
+   * 글로벌 액션 이벤트 처리
+   */
+  private async handleGlobalAction(...args: any[]): Promise<void> {
+    try {
+      console.log(`[GLOBAL_ACTION] Processing action event with ${args.length} arguments`);
+      
+      // 액션 버튼 클릭도 일반 클릭과 동일하게 처리
+      await this.handleGlobalClick(...args);
+    } catch (error) {
+      console.error(`[GLOBAL_ACTION] Error processing action:`, error);
+    }
+  }
+
+  /**
+   * 기본 알림 방식으로 폴백
+   */
+  private fallbackToDefaultNotification(notificationOptions: any, data: NotificationData, resolve: (value: boolean) => void): void {
+    console.log(`[FALLBACK] Using default notification method`);
+    
+    const notificationStartTime = Date.now();
+    
+    notifier.notify(notificationOptions as any, async (error: any, response: any, metadata: any) => {
+      if (error) {
+        console.error(`[ERROR] Notification error for ${data.uniqueKey}:`, error);
+        resolve(false);
+      } else {
+        const callbackTime = Date.now();
+        const timeDiff = callbackTime - notificationStartTime;
+        
+        console.log(`[INFO] Notification sent successfully: ${data.uniqueKey}`, {
+          response: response,
+          metadata: metadata,
+          timeDiff: `${timeDiff}ms`
+        });
+        
+        // 콜백 기반 클릭 처리 (타이밍 정보 포함)
+        await this.handleCallbackResponse(data, response, metadata, timeDiff);
+        
+        resolve(true);
+      }
+    });
+  }
+
+  /**
+   * 콜백 응답 처리 (글로벌 핸들러 대안)
+   */
+  private async handleCallbackResponse(data: NotificationData, response: any, metadata: any, timeDiff?: number): Promise<void> {
+    try {
+      console.log(`[CALLBACK] Processing callback response for ${data.uniqueKey}`);
+      console.log(`[CALLBACK] Response: ${response}, Metadata:`, metadata);
+      if (timeDiff !== undefined) {
+        console.log(`[CALLBACK] Time difference: ${timeDiff}ms`);
+      }
+      
+      // Windows에서 사용자가 클릭했는지 확인 (더 많은 케이스 추가)
+      // 🚨 중요: response가 undefined여도 콜백이 즉시 호출되면 클릭으로 간주
+      let isClicked = response === 'activate' || 
+                     response === 'clicked' || 
+                     response === '열기' ||
+                     response === '확인' ||
+                     response === '링크 열기' ||
+                     metadata?.activationType === 'user' ||
+                     metadata?.activationType === 'foreground' ||
+                     metadata?.action === '열기' ||
+                     metadata?.action === '확인' ||
+                     metadata?.action === '링크 열기';
+      
+      // undefined 응답이지만 사용자가 실제로 클릭했을 수 있음 (Windows 토스트 특성)
+      if (response === undefined && data.url) {
+        console.log(`[CALLBACK] Treating undefined response as potential user click for URL notification`);
+        isClicked = true;
+      }
+      
+      if (isClicked) {
+        console.log(`[CALLBACK] *** USER CLICKED NOTIFICATION ***`);
+        console.log(`[CALLBACK] Opening URL for: ${data.uniqueKey}`);
+        
+        if (data.url) {
+          try {
+            await shell.openExternal(data.url);
+            console.log(`[CALLBACK] Successfully opened URL via callback: ${data.url}`);
+            
+            // 알림을 읽음 처리
+            await this.markNotificationAsReadByUniqueKey(data.uniqueKey);
+            
+            // 처리된 알림은 활성 목록에서 제거
+            this.activeNotifications.delete(data.uniqueKey);
+          } catch (urlError) {
+            console.error(`[CALLBACK] Failed to open URL:`, urlError);
+            // 폴백: Windows 직접 실행
+            if (process.platform === 'win32') {
+              try {
+                const { spawn } = require('child_process');
+                spawn('rundll32', ['url.dll,FileProtocolHandler', data.url], { detached: true });
+                console.log(`[CALLBACK] Fallback URL open successful: ${data.url}`);
+              } catch (fallbackError) {
+                console.error(`[CALLBACK] Fallback failed:`, fallbackError);
+              }
+            }
+          }
+        }
+      } else {
+        console.log(`[CALLBACK] No user interaction detected (response: ${response})`);
+      }
+    } catch (error) {
+      console.error(`[CALLBACK] Error processing callback:`, error);
+    }
+  }
+
+  /**
+   * 가장 최근 알림 가져오기
+   */
+  private getMostRecentNotification(): NotificationData | null {
+    if (this.activeNotifications.size === 0) {
+      return null;
+    }
+    
+    // 가장 최근에 추가된 알림 반환
+    const notifications = Array.from(this.activeNotifications.values());
+    return notifications[notifications.length - 1];
+  }
+
   async sendNotification(data: NotificationData): Promise<boolean> {
     try {
+      console.log(`[INFO] sendNotification called for: ${data.uniqueKey}`);
+      console.log(`[DEBUG] Initial data check:`, {
+        platform: process.platform,
+        hasUrl: !!data.url,
+        url: data.url,
+        uniqueKey: data.uniqueKey
+      });
+      
       // 알림이 비활성화된 경우 스킵
-      if (!this.settingsService.getShowDesktopNotifications()) {
-        console.log('Desktop notifications disabled, skipping');
+      const notificationsEnabled = this.settingsService.getShowDesktopNotifications();
+      console.log(`[DEBUG] Desktop notifications enabled: ${notificationsEnabled}`);
+      
+      if (!notificationsEnabled) {
+        console.log('[INFO] Desktop notifications disabled, skipping');
         return false;
       }
 
@@ -55,38 +293,112 @@ export class NotificationService {
         message = data.content;
       }
 
-      // 이전 핸들러 정리 (같은 uniqueKey의 중복 방지)
-      this.cleanupHandlersForNotification(data.uniqueKey);
+      // 활성 알림 목록에 추가 (글로벌 핸들러에서 사용)
+      this.activeNotifications.set(data.uniqueKey, data);
+      console.log(`[DEBUG] Added notification to active list: ${data.uniqueKey}`);
 
-      // 고유한 클릭 핸들러 생성
-      const clickHandler = this.createClickHandler(data);
-      const actionHandler = this.createActionHandler(data);
+      // 폴백 메커니즘 제거 - 사용자가 명시적으로 클릭해야만 URL이 열림
 
-      // 핸들러를 맵에 저장하여 추후 정리 가능하도록 함
-      this.activeHandlers.set(data.uniqueKey, { click: clickHandler, action: actionHandler });
-
-      // 이벤트 리스너 등록
-      notifier.on('click', clickHandler);
-      notifier.on('action', actionHandler);
-
-      // 자동 정리 타이머 (30초 후)
+      // 60초 후 자동 정리 (최종 정리)
       setTimeout(() => {
-        this.cleanupHandlersForNotification(data.uniqueKey);
-      }, 30000);
+        this.activeNotifications.delete(data.uniqueKey);
+        console.log(`[DEBUG] Auto-cleaned notification from active list: ${data.uniqueKey}`);
+      }, 60000);
 
-      // 크로스 플랫폼 호환 알림 발송
+      // 윈도우 특수 처리 조건을 미리 계산
+      const isWindows = process.platform === 'win32';
+      const hasUrl = !!data.url;
+      const useWindowsSpecial = isWindows && hasUrl;
+      
+      console.log(`[DEBUG] Pre-Promise check:`, {
+        isWindows,
+        hasUrl,
+        useWindowsSpecial,
+        platform: process.platform,
+        url: data.url
+      });
+
+      // 크로스 플랫폼 호환 알림 발송 (콜백 기반 클릭 처리 포함)
       const result = await new Promise<boolean>((resolve) => {
         const notificationOptions = this.getNotificationOptions(data, title, message, iconPath);
         
-        notifier.notify(notificationOptions as any, (error: any, response: any, metadata: any) => {
-          if (error) {
-            console.error('Notification error:', error);
-            resolve(false);
-          } else {
-            console.log('Notification sent successfully:', data.uniqueKey);
-            resolve(true);
+        console.log(`[DEBUG] Notification options:`, notificationOptions);
+        console.log(`[INFO] Calling notifier.notify for: ${data.uniqueKey}`);
+        
+        // 디버깅을 위한 상세 로그
+        console.log(`[DEBUG] Inside Promise - Platform: ${process.platform}, Has URL: ${!!data.url}`);
+        console.log(`[DEBUG] Inside Promise - useWindowsSpecial: ${useWindowsSpecial}`);
+        
+        if (useWindowsSpecial) {
+          console.log(`[WINDOWS] Using Windows-specific notification with click detection`);
+          
+          // SnoreToast 직접 실행으로 클릭 감지
+          const { spawn } = require('child_process');
+          const path = require('path');
+          
+          // SnoreToast 실행 파일 경로 찾기
+          let snoreToastPath;
+          try {
+            const nodeNotifierPath = require.resolve('node-notifier');
+            snoreToastPath = path.join(path.dirname(nodeNotifierPath), 'vendor', 'snoreToast', 'SnoreToast.exe');
+          } catch (error) {
+            console.error(`[WINDOWS] Failed to find SnoreToast path:`, error);
+            this.fallbackToDefaultNotification(notificationOptions, data, resolve);
+            return;
           }
-        });
+          
+          const snoreArgs = [
+            '-t', notificationOptions.title,
+            '-m', notificationOptions.message,
+            '-p', notificationOptions.icon || '',
+            '-id', data.uniqueKey,
+            '-appID', 'Streamer.Alarm.System',
+            '-b', '확인;링크 열기'
+          ];
+          
+          console.log(`[WINDOWS] Launching SnoreToast with args:`, snoreArgs);
+          
+          const snoreProcess = spawn(snoreToastPath, snoreArgs, { 
+            detached: false,
+            stdio: ['ignore', 'pipe', 'pipe']
+          });
+          
+          let output = '';
+          snoreProcess.stdout.on('data', (stdoutData: any) => {
+            output += stdoutData.toString();
+          });
+          
+          snoreProcess.on('close', async (code: number | null) => {
+            console.log(`[WINDOWS] SnoreToast exited with code: ${code}`);
+            console.log(`[WINDOWS] SnoreToast output: ${output}`);
+            
+            // 사용자가 클릭했는지 확인 (exit code 기반)
+            if (code === 0) { // 성공적인 사용자 상호작용
+              console.log(`[WINDOWS] *** USER CLICKED NOTIFICATION ***`);
+              try {
+                await shell.openExternal(data.url!);
+                console.log(`[WINDOWS] Successfully opened URL: ${data.url}`);
+                
+                // 알림을 읽음 처리
+                await this.markNotificationAsReadByUniqueKey(data.uniqueKey);
+                this.activeNotifications.delete(data.uniqueKey);
+              } catch (urlError) {
+                console.error(`[WINDOWS] Failed to open URL:`, urlError);
+              }
+            }
+            
+            resolve(true);
+          });
+          
+          snoreProcess.on('error', (error: any) => {
+            console.error(`[WINDOWS] SnoreToast error:`, error);
+            // 폴백: 기본 방식 사용
+            this.fallbackToDefaultNotification(notificationOptions, data, resolve);
+          });
+        } else {
+          // 다른 플랫폼 또는 URL이 없는 경우 기본 방식
+          this.fallbackToDefaultNotification(notificationOptions, data, resolve);
+        }
       });
 
       // 데이터베이스에 알림 기록 저장 및 UI 업데이트
@@ -120,15 +432,27 @@ export class NotificationService {
   }
 
   async sendTestNotification(): Promise<boolean> {
+    console.log(`[INFO] Test notification requested`);
+    
     const testData: NotificationData = {
       type: 'system',
       streamerName: 'System',
       title: '알림 테스트',
-      content: '알림 시스템이 정상적으로 작동하고 있습니다.',
+      content: '알림 시스템이 정상적으로 작동하고 있습니다. 이 알림을 클릭하면 GitHub이 열립니다.',
+      url: 'https://github.com', // 테스트용 URL 추가
       uniqueKey: `test_${Date.now()}`
     };
 
-    return await this.sendNotification(testData);
+    console.log(`[INFO] Sending test notification:`, {
+      uniqueKey: testData.uniqueKey,
+      url: testData.url,
+      platform: process.platform,
+      showDesktopNotifications: this.settingsService.getShowDesktopNotifications()
+    });
+    
+    const result = await this.sendNotification(testData);
+    console.log(`[INFO] Test notification result: ${result}`);
+    return result;
   }
 
   private async processProfileImage(imageUrl: string): Promise<string | undefined> {
@@ -307,91 +631,15 @@ export class NotificationService {
     }
   }
 
-  // 클릭 핸들러 생성 (각 알림별로 고유)
-  private createClickHandler(data: NotificationData): (...args: any[]) => void {
-    return async (notifierObject: any, options: any, event: any) => {
-      try {
-        // 특정 알림만 처리 (ID로 확인)
-        if (options && options.id !== data.uniqueKey) {
-          return; // 다른 알림의 클릭 이벤트는 무시
-        }
+  // 기존의 개별 핸들러 생성 메서드들 제거됨 - 글로벌 핸들러로 대체
 
-        console.log(`Notification clicked: ${data.uniqueKey}`);
-        
-        // 알림을 읽음 처리
-        await this.markNotificationAsReadByUniqueKey(data.uniqueKey);
-        
-        if (data.url) {
-          console.log(`Opening URL for ${data.uniqueKey}: ${data.url}`);
-          await shell.openExternal(data.url);
-        }
-        
-        // 핸들러 정리
-        this.cleanupHandlersForNotification(data.uniqueKey);
-      } catch (error) {
-        console.error(`Failed to handle click for ${data.uniqueKey}:`, error);
-      }
-    };
-  }
-
-  // 액션 핸들러 생성 (각 알림별로 고유)
-  private createActionHandler(data: NotificationData): (...args: any[]) => void {
-    return async (notifierObject: any, options: any, event: any) => {
-      try {
-        // 특정 알림만 처리 (ID로 확인)
-        if (options && options.id !== data.uniqueKey) {
-          return; // 다른 알림의 액션 이벤트는 무시
-        }
-
-        console.log(`Notification action clicked: ${data.uniqueKey}, event: ${event}`);
-        
-        // Windows 토스트 알림에서 '열기' 버튼을 클릭한 경우
-        if (event === '열기' && data.url) {
-          // 알림을 읽음 처리
-          await this.markNotificationAsReadByUniqueKey(data.uniqueKey);
-          
-          console.log(`Opening URL from action for ${data.uniqueKey}: ${data.url}`);
-          await shell.openExternal(data.url);
-        }
-        
-        // 핸들러 정리
-        this.cleanupHandlersForNotification(data.uniqueKey);
-      } catch (error) {
-        console.error(`Failed to handle action for ${data.uniqueKey}:`, error);
-      }
-    };
-  }
-
-  // 특정 알림의 핸들러 정리
-  private cleanupHandlersForNotification(uniqueKey: string): void {
-    try {
-      const handlers = this.activeHandlers.get(uniqueKey);
-      if (handlers) {
-        // 이벤트 리스너 제거
-        notifier.removeListener('click', handlers.click);
-        notifier.removeListener('action', handlers.action);
-        
-        // 맵에서 제거
-        this.activeHandlers.delete(uniqueKey);
-        
-        console.log(`Cleaned up handlers for notification: ${uniqueKey}`);
-      }
-    } catch (error) {
-      console.error(`Failed to cleanup handlers for ${uniqueKey}:`, error);
-    }
-  }
-
-  // 모든 활성 핸들러 정리 (앱 종료 시 사용)
+  // 앱 종료 시 정리 (글로벌 핸들러는 자동으로 정리됨)
   public cleanupAllHandlers(): void {
     try {
-      for (const [uniqueKey, handlers] of this.activeHandlers.entries()) {
-        notifier.removeListener('click', handlers.click);
-        notifier.removeListener('action', handlers.action);
-      }
-      this.activeHandlers.clear();
-      console.log('All notification handlers cleaned up');
+      this.activeNotifications.clear();
+      console.log('All active notifications cleared');
     } catch (error) {
-      console.error('Failed to cleanup all handlers:', error);
+      console.error('Failed to cleanup notifications:', error);
     }
   }
 
@@ -436,12 +684,21 @@ export class NotificationService {
     // 플랫폼별 최적화
     switch (process.platform) {
       case 'win32':
-        return {
+        // Windows 토스트 알림 최대 호환성을 위한 간소화된 옵션
+        const winOptions: any = {
           ...baseOptions,
-          wait: true,
-          actions: data.url ? ['열기'] : undefined,
+          wait: false, // wait를 false로 변경하여 이벤트 처리 개선
           appID: 'Streamer.Alarm.System'
         };
+        
+        // URL이 있는 경우 단순한 액션 버튼만 추가
+        if (data.url) {
+          winOptions.actions = ['확인'];
+          // 복잡한 옵션들 제거
+        }
+        
+        console.log(`[DEBUG] Windows notification options for ${data.uniqueKey}:`, winOptions);
+        return winOptions;
         
       case 'darwin':
         return {

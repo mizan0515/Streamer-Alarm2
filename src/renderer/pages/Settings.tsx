@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import DonationWidget from '../components/DonationWidget';
 
 interface SettingsData {
   checkInterval: number;
@@ -372,6 +373,18 @@ const Settings: React.FC<SettingsProps> = ({ onNaverActionStart, onNaverActionEn
                   브라우저 캐시를 자동으로 정리하는 주기를 설정합니다
                 </p>
               </div>
+            </div>
+          </div>
+
+          {/* 개발자 후원 */}
+          <div className="card">
+            <div className="card-header">
+              <h2 className="text-lg font-semibold text-white flex items-center">
+                💝 개발자 후원
+              </h2>
+            </div>
+            <div className="card-body">
+              <DonationWidget />
             </div>
           </div>
           </div>
