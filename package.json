@@ -17,7 +17,7 @@
     "build:main": "cross-env NODE_ENV=production webpack --config webpack.main.config.js --mode production",
     "build:renderer": "cross-env NODE_ENV=production webpack --config webpack.renderer.config.js --mode production",
     "start": "electron .",
-    "pack": "electron-builder --dir && npm run verify-build",
+    "pack": "npm run build && electron-builder --dir && npm run verify-build",
     "dist": "npm run build && electron-builder && npm run verify-build",
     "verify-build": "node scripts/verify-build.js",
     "postinstall": "electron-builder install-app-deps"
