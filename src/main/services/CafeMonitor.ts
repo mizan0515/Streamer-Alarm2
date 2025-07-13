@@ -118,7 +118,10 @@ export class CafeMonitor {
       
       if (fs.existsSync(playwrightCliPath)) {
         console.log('Installing Chromium browser...');
-        execSync(`node "${playwrightCliPath}" install chromium`, {
+        
+        // Electron의 Node.js 사용 (시스템 Node.js에 의존하지 않음)
+        const electronNodePath = process.execPath;
+        execSync(`"${electronNodePath}" "${playwrightCliPath}" install chromium`, {
           stdio: 'pipe',
           timeout: 120000 // 2분 타임아웃
         });
