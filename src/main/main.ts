@@ -124,6 +124,15 @@ class StreamerAlarmApp {
     // IPC 핸들러 설정
     this.setupIpcHandlers();
 
+    // 알림 서비스 중복 체크 초기화 (모니터링 서비스 시작 전)
+    try {
+      await this.notificationService.initializeDuplicateCheck();
+      console.log('Notification service duplicate check initialized successfully');
+    } catch (error) {
+      console.error('Notification service duplicate check initialization failed:', error);
+      // 초기화 실패 시에도 앱 계속 실행
+    }
+
     // 모니터링 서비스 시작
     try {
       await this.monitoringService.start();
@@ -381,6 +390,39 @@ class StreamerAlarmApp {
       return await this.monitoringService.initiateNaverLogout();
     });
 
+    // 위버스 관련 IPC
+    ipcMain.handle('weverse-login', async () => {
+      return await this.monitoringService.initiateWeverseLogin();
+    });
+
+    ipcMain.handle('weverse-logout', async () => {
+      return await this.monitoringService.initiateWeverseLogout();
+    });
+
+    ipcMain.handle('get-weverse-artists', async () => {
+      return await this.monitoringService.getWeverseArtists();
+    });
+
+    ipcMain.handle('update-weverse-artist', async (_, data: { artistName: string; isEnabled: boolean }) => {
+      await this.monitoringService.updateWeverseArtistStatus(data.artistName, data.isEnabled);
+      
+      // 업데이트된 아티스트 목록을 모든 창에 브로드캐스트
+      const artists = await this.monitoringService.getWeverseArtists();
+      this.broadcastToAll('weverse-artists-updated', artists);
+      
+      return true;
+    });
+
+    ipcMain.handle('refresh-weverse-artists', async () => {
+      await this.monitoringService.refreshWeverseArtists();
+      
+      // 업데이트된 아티스트 목록을 모든 창에 브로드캐스트
+      const artists = await this.monitoringService.getWeverseArtists();
+      this.broadcastToAll('weverse-artists-updated', artists);
+      
+      return true;
+    });
+
     // 유틸리티 IPC
     ipcMain.handle('open-external', async (_, url: string) => {
       return await shell.openExternal(url);
@@ -413,6 +455,55 @@ class StreamerAlarmApp {
       } catch (error) {
         console.error('Failed to get auto-start debug info:', error);
         return { error: error instanceof Error ? error.message : String(error) };
+      }
+    });
+
+    // 위버스 데이터 클리어 IPC (개발자 콘솔용)
+    ipcMain.handle('clear-weverse-data', async () => {
+      try {
+        console.log('🧹 [DEV] Clearing weverse notification data...');
+        await this.databaseManager.clearWeverseNotifications();
+        console.log('✅ [DEV] Weverse notification data cleared');
+        return { success: true };
+      } catch (error) {
+        console.error('❌ [DEV] Failed to clear weverse data:', error);
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    });
+
+    ipcMain.handle('clear-weverse-artists', async () => {
+      try {
+        console.log('🧹 [DEV] Clearing weverse artists data...');
+        await this.databaseManager.clearWeverseArtists();
+        console.log('✅ [DEV] Weverse artists data cleared');
+        return { success: true };
+      } catch (error) {
+        console.error('❌ [DEV] Failed to clear weverse artists:', error);
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    });
+
+    ipcMain.handle('reset-weverse-notifications', async () => {
+      try {
+        console.log('🔄 [DEV] Resetting weverse notifications to live type...');
+        await this.databaseManager.resetWeverseNotificationsToLive();
+        console.log('✅ [DEV] Weverse notifications reset to live type');
+        return { success: true };
+      } catch (error) {
+        console.error('❌ [DEV] Failed to reset weverse notifications:', error);
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    });
+
+    ipcMain.handle('diagnostic-weverse-database', async () => {
+      try {
+        console.log('🔍 [DEV] Starting Weverse database diagnostic...');
+        const result = await this.databaseManager.diagnosticWeverseDatabase();
+        console.log('✅ [DEV] Weverse database diagnostic completed');
+        return { success: true, data: result };
+      } catch (error) {
+        console.error('❌ [DEV] Failed to run database diagnostic:', error);
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
       }
     });
 
@@ -632,6 +723,20 @@ class StreamerAlarmApp {
       });
     } catch (error) {
       console.error('Failed to update tray menu with login status:', error);
+    }
+  }
+
+  // 모든 렌더러 프로세스에 메시지 브로드캐스트
+  broadcastToAll(channel: string, ...args: any[]): void {
+    try {
+      const allWindows = BrowserWindow.getAllWindows();
+      allWindows.forEach(window => {
+        if (window && !window.isDestroyed()) {
+          window.webContents.send(channel, ...args);
+        }
+      });
+    } catch (error) {
+      console.error('Failed to broadcast message:', error);
     }
   }
 }

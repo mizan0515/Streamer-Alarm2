@@ -21,14 +21,15 @@ export interface StreamerData {
 export interface NotificationSettings {
   id: number;
   streamerId: number;
-  platform: 'chzzk' | 'cafe' | 'twitter';
+  platform: 'chzzk' | 'cafe' | 'twitter' | 'weverse';
   enabled: boolean;
 }
 
 export interface NotificationRecord {
   id: number;
-  streamerId: number;
-  type: 'live' | 'cafe' | 'twitter' | 'system';
+  streamerId?: number;
+  weverseArtistId?: number;
+  type: 'live' | 'cafe' | 'twitter' | 'weverse' | 'system';
   title: string;
   content?: string;
   contentHtml?: string;
@@ -62,7 +63,7 @@ export interface LiveStatus {
 }
 
 export interface NotificationData {
-  type: 'live' | 'cafe' | 'twitter' | 'system';
+  type: 'live' | 'cafe' | 'twitter' | 'weverse' | 'system';
   streamerName: string;
   title: string;
   content?: string;
@@ -89,9 +90,32 @@ export interface TwitterTweet {
   timestamp: string;
 }
 
+// 위버스 아티스트 타입
+export interface WeverseArtist {
+  id: number;
+  artistName: string;
+  profileImageUrl?: string;
+  isEnabled: boolean;
+  lastNotificationId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WeverseNotification {
+  id: string;
+  artistName: string;
+  title: string;
+  content: string;
+  url: string;
+  timestamp: Date;
+  type: 'artist' | 'general';
+  timeText?: string;
+  profileImageUrl?: string;
+}
+
 // 스트리머 검색 결과 타입
 export interface StreamerSearchResult {
-  platform: 'chzzk' | 'twitter' | 'cafe';
+  platform: 'chzzk' | 'twitter' | 'cafe' | 'weverse';
   name: string;
   displayName: string;
   id: string;
@@ -106,12 +130,14 @@ export interface StreamerSearchResults {
   chzzk: StreamerSearchResult[];
   twitter: StreamerSearchResult[];
   cafe: StreamerSearchResult[];
+  weverse: StreamerSearchResult[];
 }
 
 // IPC 통신 이벤트 타입
 export interface IpcEvents {
   // Main → Renderer
   'streamer-data-updated': StreamerData[];
+  'weverse-artists-updated': WeverseArtist[];
   'notification-received': NotificationData;
   'notification-history-updated': NotificationRecord[];
   'live-status-updated': LiveStatus[];
@@ -137,6 +163,11 @@ export interface IpcEvents {
   'stop-monitoring': void;
   'naver-login': void;
   'naver-logout': void;
+  'weverse-login': void;
+  'weverse-logout': void;
+  'get-weverse-artists': void;
+  'update-weverse-artist': { artistName: string; isEnabled: boolean };
+  'refresh-weverse-artists': void;
   'get-live-status': void;
   'open-external': string;
   'show-tray-menu': void;
@@ -154,6 +185,7 @@ export type SettingKey =
   | 'cacheCleanupInterval'
   | 'theme'
   | 'needNaverLogin'
+  | 'needWeverseLogin'
   | 'newStreamerFilterHours'; // 새 스트리머 과거 알림 필터링 시간 (시간 단위)
 
 // 알림 설정 컨텍스트
@@ -161,6 +193,7 @@ export interface NotificationConfig {
   chzzk: boolean;
   cafe: boolean;
   twitter: boolean;
+  weverse: boolean;
 }
 
 // 모니터링 통계

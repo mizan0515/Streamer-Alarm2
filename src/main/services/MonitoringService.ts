@@ -4,7 +4,8 @@ import { SettingsService } from './SettingsService';
 import { ChzzkMonitor } from './ChzzkMonitor';
 import { TwitterMonitor } from './TwitterMonitor';
 import { CafeMonitor } from './CafeMonitor';
-import { LiveStatus, TwitterTweet, CafePost } from '@shared/types';
+import { WeiverseMonitor } from './WeiverseMonitor';
+import { LiveStatus, TwitterTweet, CafePost, WeverseNotification } from '@shared/types';
 
 export class MonitoringService {
   private databaseManager: DatabaseManager;
@@ -13,6 +14,7 @@ export class MonitoringService {
   public chzzkMonitor: ChzzkMonitor;
   private twitterMonitor: TwitterMonitor;
   private cafeMonitor: CafeMonitor;
+  private weverseMonitor: WeiverseMonitor;
   
   private isRunning: boolean = false;
   private monitoringInterval: NodeJS.Timeout | null = null;
@@ -34,6 +36,7 @@ export class MonitoringService {
     this.chzzkMonitor = new ChzzkMonitor(databaseManager, notificationService);
     this.twitterMonitor = new TwitterMonitor(databaseManager, notificationService, this.settingsService);
     this.cafeMonitor = new CafeMonitor(databaseManager, notificationService, this.settingsService);
+    this.weverseMonitor = new WeiverseMonitor(databaseManager, notificationService, this.settingsService);
   }
 
   async start(): Promise<boolean> {
@@ -56,6 +59,9 @@ export class MonitoringService {
       
       // Twitter 인스턴스 상태 확인
       await this.twitterMonitor.checkInstanceHealth();
+      
+      // 위버스 모니터 초기화
+      await this.weverseMonitor.initialize();
       
       // 네이버 로그인 상태 초기화 및 모니터링 시작
       await this.initializeLoginStatus();
@@ -98,6 +104,7 @@ export class MonitoringService {
       
       // 브라우저 정리
       await this.cafeMonitor.cleanup();
+      await this.weverseMonitor.cleanup();
       this.chzzkMonitor.cleanup();
       this.twitterMonitor.cleanup();
       
@@ -185,10 +192,11 @@ export class MonitoringService {
       console.log('Performing monitoring check...');
       
       // 모든 플랫폼 병렬 모니터링
-      const [liveStatuses, tweets, cafePosts] = await Promise.all([
+      const [liveStatuses, tweets, cafePosts, weverseNotifications] = await Promise.all([
         this.checkChzzkStreams(),
         this.checkTwitterFeeds(),
-        this.checkCafePosts()
+        this.checkCafePosts(),
+        this.checkWeverseNotifications()
       ]);
       
       // 라이브 상태 업데이트
@@ -197,7 +205,10 @@ export class MonitoringService {
       // 모니터링 상태 기록
       await this.updateMonitoringStatus();
       
-      console.log(`Monitoring check completed. Live: ${liveStatuses.filter(s => s.isLive).length}, Tweets: ${tweets.length}, Posts: ${cafePosts.length}`);
+      // 위버스 알림 전송
+      await this.sendWeverseNotifications(weverseNotifications);
+      
+      console.log(`Monitoring check completed. Live: ${liveStatuses.filter(s => s.isLive).length}, Tweets: ${tweets.length}, Posts: ${cafePosts.length}, Weverse: ${weverseNotifications.length}`);
       
     } catch (error) {
       console.error('Monitoring check failed:', error);
@@ -228,6 +239,23 @@ export class MonitoringService {
     } catch (error) {
       console.error('Cafe monitoring failed:', error);
       return [];
+    }
+  }
+
+  private async checkWeverseNotifications(): Promise<WeverseNotification[]> {
+    try {
+      return await this.weverseMonitor.checkAllStreamers();
+    } catch (error) {
+      console.error('Weverse monitoring failed:', error);
+      return [];
+    }
+  }
+
+  private async sendWeverseNotifications(notifications: WeverseNotification[]): Promise<void> {
+    try {
+      await this.weverseMonitor.sendWeverseNotifications(notifications);
+    } catch (error) {
+      console.error('Weverse notification sending failed:', error);
     }
   }
 
@@ -727,5 +755,99 @@ export class MonitoringService {
 
   private delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  // 위버스 관련 public 메서드들
+  async initiateWeverseLogin(): Promise<boolean> {
+    try {
+      return await this.weverseMonitor.initiateLogin();
+    } catch (error) {
+      console.error('Failed to initiate Weverse login:', error);
+      return false;
+    }
+  }
+
+  async initiateWeverseLogout(): Promise<boolean> {
+    try {
+      return await this.weverseMonitor.initiateLogout();
+    } catch (error) {
+      console.error('Failed to initiate Weverse logout:', error);
+      return false;
+    }
+  }
+
+  async extractWeverseArtistList(): Promise<string[]> {
+    try {
+      return await this.weverseMonitor.extractArtistList();
+    } catch (error) {
+      console.error('Failed to extract Weverse artist list:', error);
+      return [];
+    }
+  }
+
+  async checkWeverseLoginStatus(): Promise<boolean> {
+    try {
+      const isLoggedIn = await this.weverseMonitor.checkLoginStatus();
+      
+      // UI에 위버스 로그인 상태 변경 알림
+      this.notifyWeverseLoginStatusChange(!isLoggedIn);
+      
+      return isLoggedIn;
+    } catch (error) {
+      console.error('Failed to check Weverse login status:', error);
+      
+      // 에러 시 로그인 필요한 상태로 UI 업데이트
+      this.notifyWeverseLoginStatusChange(true);
+      
+      return false;
+    }
+  }
+
+  private notifyWeverseLoginStatusChange(needLogin: boolean): void {
+    try {
+      console.log(`📢 Broadcasting Weverse login status: needLogin=${needLogin}`);
+      
+      // 웹 인터페이스에 상태 변경 알림
+      const { webContents } = require('electron');
+      const allWebContents = webContents.getAllWebContents();
+      allWebContents.forEach((wc: any) => {
+        if (!wc.isDestroyed()) {
+          wc.send('weverse-login-status-changed', { needLogin });
+        }
+      });
+      
+    } catch (error) {
+      console.error('Failed to notify Weverse login status change:', error);
+    }
+  }
+
+  async refreshWeverseArtists(): Promise<void> {
+    try {
+      await this.weverseMonitor.extractArtistList();
+    } catch (error) {
+      console.error('Failed to refresh Weverse artists:', error);
+    }
+  }
+
+  async getWeverseArtists(): Promise<any[]> {
+    try {
+      return await this.databaseManager.getWeverseArtists();
+    } catch (error) {
+      console.error('Failed to get Weverse artists:', error);
+      return [];
+    }
+  }
+
+  async updateWeverseArtistStatus(artistName: string, isEnabled: boolean): Promise<void> {
+    try {
+      const artists = await this.databaseManager.getWeverseArtists();
+      const artist = artists.find(a => a.artistName === artistName);
+      
+      if (artist) {
+        await this.databaseManager.updateWeverseArtist(artist.id, { isEnabled });
+      }
+    } catch (error) {
+      console.error('Failed to update Weverse artist status:', error);
+    }
   }
 }

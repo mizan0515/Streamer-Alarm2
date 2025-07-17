@@ -68,6 +68,7 @@ export class SettingsService {
       cacheCleanupInterval: parseInt(settings.cacheCleanupInterval || '3600'),
       theme: settings.theme || 'dark',
       needNaverLogin: settings.needNaverLogin === 'true',
+      needWeverseLogin: settings.needWeverseLogin === 'true',
       newStreamerFilterHours: parseInt(settings.newStreamerFilterHours || '24')
     };
   }
@@ -110,6 +111,7 @@ export class SettingsService {
       cacheCleanupInterval: '3600',
       theme: 'dark',
       needNaverLogin: 'true',
+      needWeverseLogin: 'true',
       newStreamerFilterHours: '24' // 새 스트리머 과거 알림 필터링 시간 (기본 24시간)
     };
 
@@ -143,6 +145,10 @@ export class SettingsService {
 
   getNeedNaverLogin(): boolean {
     return this.getSetting('needNaverLogin') === 'true';
+  }
+
+  getNeedWeverseLogin(): boolean {
+    return this.getSetting('needWeverseLogin') === 'true';
   }
 
   /**

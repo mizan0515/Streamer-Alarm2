@@ -4,13 +4,16 @@ import Sidebar from './components/Sidebar';
 import StreamerManagement from './pages/StreamerManagement';
 import NotificationHistory from './pages/NotificationHistory';
 import Settings from './pages/Settings';
-import { StreamerData, NotificationRecord, MonitoringStats } from '@shared/types';
+import WeverseManagement from './pages/WeverseManagement';
+import { StreamerData, NotificationRecord, MonitoringStats, WeverseArtist } from '@shared/types';
 
 const App: React.FC = () => {
   console.log('🚀 App component rendering...');
   
   const [streamers, setStreamers] = useState<StreamerData[]>([]);
   const [notifications, setNotifications] = useState<NotificationRecord[]>([]);
+  const [weverseArtists, setWeverseArtists] = useState<WeverseArtist[]>([]);
+  const [needWeverseLogin, setNeedWeverseLogin] = useState(true);
   const [stats, setStats] = useState<MonitoringStats>({
     totalStreamers: 0,
     activeStreamers: 0,
@@ -21,6 +24,8 @@ const App: React.FC = () => {
   });
   const [isLoading, setIsLoading] = useState(false);
   const [isNaverActionLoading, setIsNaverActionLoading] = useState(false);
+  const [isWeverseLoginLoading, setIsWeverseLoginLoading] = useState(false);
+  const [isWeverseRefreshLoading, setIsWeverseRefreshLoading] = useState(false);
 
   useEffect(() => {
     initializeApp();
@@ -50,6 +55,28 @@ const App: React.FC = () => {
         notificationsData = await window.electronAPI.getNotifications({ limit: 100 });
         console.log('🔔 Loaded notifications:', notificationsData.length);
         setNotifications(notificationsData);
+      }
+      
+      // 위버스 아티스트 데이터 로드
+      let weverseArtistsData: WeverseArtist[] = [];
+      if (window.electronAPI?.getWeverseArtists) {
+        try {
+          weverseArtistsData = await window.electronAPI.getWeverseArtists();
+          console.log('🎵 Loaded Weverse artists:', weverseArtistsData.length);
+          setWeverseArtists(weverseArtistsData);
+        } catch (error) {
+          console.warn('Failed to load Weverse artists:', error);
+        }
+      }
+      
+      // 위버스 로그인 상태 확인
+      if (window.electronAPI?.getSettings) {
+        try {
+          const settings = await window.electronAPI.getSettings();
+          setNeedWeverseLogin(settings.needWeverseLogin);
+        } catch (error) {
+          console.warn('Failed to get Weverse login status:', error);
+        }
       }
       
       // 통계 업데이트 (로드된 데이터 사용)
@@ -82,7 +109,16 @@ const App: React.FC = () => {
       // 설정 업데이트 이벤트 리스너 (네이버 로그인 상태 변경 등)
       window.electronAPI.on('settings-updated', (updatedSettings: Record<string, any>) => {
         console.log('⚙️ Received settings update:', updatedSettings);
-        // 설정 변경 시 필요한 추가 작업이 있다면 여기에 추가
+        // 위버스 로그인 상태 업데이트
+        if (updatedSettings.needWeverseLogin !== undefined) {
+          setNeedWeverseLogin(updatedSettings.needWeverseLogin);
+        }
+      });
+      
+      // 위버스 아티스트 업데이트 이벤트 리스너
+      window.electronAPI.on('weverse-artists-updated', (updatedArtists: WeverseArtist[]) => {
+        console.log('🎵 Received Weverse artists update:', updatedArtists.length);
+        setWeverseArtists(updatedArtists);
       });
 
       // 스트리머 데이터 업데이트 이벤트 리스너
@@ -108,6 +144,7 @@ const App: React.FC = () => {
       window.electronAPI.removeAllListeners('streamer-data-updated');
       window.electronAPI.removeAllListeners('monitoring-status-changed');
       window.electronAPI.removeAllListeners('settings-updated');
+      window.electronAPI.removeAllListeners('weverse-artists-updated');
     }
   };
 
@@ -251,6 +288,95 @@ const App: React.FC = () => {
       alert('알림 새로고침에 실패했습니다: ' + (error instanceof Error ? error.message : String(error)));
     }
   };
+  
+  // 위버스 관련 핸들러
+  const handleWeverseLogin = async () => {
+    try {
+      console.log('🔐 Initiating Weverse login...');
+      setIsWeverseLoginLoading(true);
+      
+      if (window.electronAPI?.weverseLogin) {
+        await window.electronAPI.weverseLogin();
+        console.log('✅ Weverse login completed');
+        
+        // 설정 새로고침
+        const settings = await window.electronAPI.getSettings();
+        setNeedWeverseLogin(settings.needWeverseLogin);
+        
+        // 아티스트 목록 새로고침
+        const artists = await window.electronAPI.getWeverseArtists();
+        setWeverseArtists(artists);
+      }
+    } catch (error) {
+      console.error('❌ Failed to login to Weverse:', error);
+      alert('위버스 로그인에 실패했습니다: ' + (error instanceof Error ? error.message : String(error)));
+    } finally {
+      setIsWeverseLoginLoading(false);
+    }
+  };
+  
+  const handleWeverseLogout = async () => {
+    try {
+      console.log('🚪 Initiating Weverse logout...');
+      setIsWeverseLoginLoading(true);
+      
+      if (window.electronAPI?.weverseLogout) {
+        await window.electronAPI.weverseLogout();
+        console.log('✅ Weverse logout completed');
+        
+        // 설정 새로고침
+        const settings = await window.electronAPI.getSettings();
+        setNeedWeverseLogin(settings.needWeverseLogin);
+        
+        // 아티스트 목록 초기화
+        setWeverseArtists([]);
+      }
+    } catch (error) {
+      console.error('❌ Failed to logout from Weverse:', error);
+      alert('위버스 로그아웃에 실패했습니다: ' + (error instanceof Error ? error.message : String(error)));
+    } finally {
+      setIsWeverseLoginLoading(false);
+    }
+  };
+  
+  const handleRefreshWeverseArtists = async () => {
+    try {
+      console.log('🔄 Refreshing Weverse artists...');
+      setIsWeverseRefreshLoading(true);
+      
+      if (window.electronAPI?.refreshWeverseArtists) {
+        await window.electronAPI.refreshWeverseArtists();
+        console.log('✅ Weverse artists refreshed');
+        
+        // 아티스트 목록 새로고침
+        const artists = await window.electronAPI.getWeverseArtists();
+        setWeverseArtists(artists);
+      }
+    } catch (error) {
+      console.error('❌ Failed to refresh Weverse artists:', error);
+      alert('위버스 아티스트 새로고침에 실패했습니다: ' + (error instanceof Error ? error.message : String(error)));
+    } finally {
+      setIsWeverseRefreshLoading(false);
+    }
+  };
+  
+  const handleToggleWeverseArtist = async (artistName: string, isEnabled: boolean) => {
+    try {
+      console.log(`🎵 Toggling Weverse artist ${artistName} to ${isEnabled}`);
+      
+      if (window.electronAPI?.updateWeverseArtist) {
+        await window.electronAPI.updateWeverseArtist({ artistName, isEnabled });
+        console.log('✅ Weverse artist status updated');
+        
+        // 아티스트 목록 새로고침
+        const artists = await window.electronAPI.getWeverseArtists();
+        setWeverseArtists(artists);
+      }
+    } catch (error) {
+      console.error('❌ Failed to toggle Weverse artist:', error);
+      alert('위버스 아티스트 설정 변경에 실패했습니다: ' + (error instanceof Error ? error.message : String(error)));
+    }
+  };
 
   if (isLoading) {
     return (
@@ -279,6 +405,28 @@ const App: React.FC = () => {
             <div className="spinner spinner-lg mb-6"></div>
             <h2 className="text-xl font-bold text-white neon-text mb-2">네이버 계정 처리 중</h2>
             <p className="text-gray-400">잠시만 기다려주세요...</p>
+          </div>
+        </div>
+      )}
+      
+      {/* 위버스 로그인/로그아웃 로딩 오버레이 */}
+      {isWeverseLoginLoading && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center">
+          <div className="glass-card p-8 text-center animate-glow">
+            <div className="spinner spinner-lg mb-6"></div>
+            <h2 className="text-xl font-bold text-white neon-text mb-2">위버스 계정 처리 중</h2>
+            <p className="text-gray-400">브라우저에서 위버스 로그인을 완료해주세요...</p>
+          </div>
+        </div>
+      )}
+      
+      {/* 위버스 아티스트 새로고침 로딩 오버레이 */}
+      {isWeverseRefreshLoading && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center">
+          <div className="glass-card p-8 text-center animate-glow">
+            <div className="spinner spinner-lg mb-6"></div>
+            <h2 className="text-xl font-bold text-white neon-text mb-2">아티스트 목록 새로고침 중</h2>
+            <p className="text-gray-400">위버스에서 아티스트 정보를 가져오는 중입니다...</p>
           </div>
         </div>
       )}
@@ -314,6 +462,23 @@ const App: React.FC = () => {
                     setNotifications(newNotifications);
                     updateStats(streamers, newNotifications);
                   }}
+                />
+              </div>
+            } 
+          />
+          <Route 
+            path="/weverse" 
+            element={
+              <div className="h-full">
+                <WeverseManagement 
+                  artists={weverseArtists}
+                  needWeverseLogin={needWeverseLogin}
+                  isWeverseLoginLoading={isWeverseLoginLoading}
+                  isWeverseRefreshLoading={isWeverseRefreshLoading}
+                  onLogin={handleWeverseLogin}
+                  onLogout={handleWeverseLogout}
+                  onRefresh={handleRefreshWeverseArtists}
+                  onToggleArtist={handleToggleWeverseArtist}
                 />
               </div>
             } 

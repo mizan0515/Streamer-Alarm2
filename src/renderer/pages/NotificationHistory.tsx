@@ -19,7 +19,7 @@ const NotificationHistory: React.FC<NotificationHistoryProps> = ({
       createdAt: notifications[0].createdAt
     } : null
   });
-  const [filter, setFilter] = useState<'all' | 'live' | 'cafe' | 'twitter'>('all');
+  const [filter, setFilter] = useState<'all' | 'live' | 'cafe' | 'twitter' | 'weverse'>('all');
   const [isLoading, setIsLoading] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
@@ -28,7 +28,8 @@ const NotificationHistory: React.FC<NotificationHistoryProps> = ({
     all: 0,
     live: 0,
     cafe: 0,
-    twitter: 0
+    twitter: 0,
+    weverse: 0
   });
   const [hasNewNotifications, setHasNewNotifications] = useState(false);
   const [showScrollButton, setShowScrollButton] = useState(false);
@@ -38,6 +39,14 @@ const NotificationHistory: React.FC<NotificationHistoryProps> = ({
   
   const containerRef = useRef<HTMLDivElement>(null);
   const itemsPerPage = 100;
+
+  // 위버스 알림 구분 헬퍼 함수
+  const isWeverseNotification = (notification: NotificationRecord): boolean => {
+    return !!(notification.type === 'weverse' || 
+              notification.url?.includes('weverse.io') || 
+              notification.title?.includes('위버스') || 
+              notification.content?.includes('[위버스]'));
+  };
 
   // 필터별 개수 로드
   const loadFilterCounts = async () => {
@@ -49,11 +58,17 @@ const NotificationHistory: React.FC<NotificationHistoryProps> = ({
         window.electronAPI.getTotalNotificationCount({ type: 'twitter' })
       ]);
       
+      // 위버스 알림 개수는 클라이언트 사이드에서 계산
+      const allNotifications = await window.electronAPI.getNotifications({ type: 'all' });
+      const weverseCount = allNotifications.filter(isWeverseNotification).length;
+      const actualLiveCount = allNotifications.filter((n: NotificationRecord) => n.type === 'live' && !isWeverseNotification(n)).length;
+      
       setFilterCounts({
         all: allCount,
-        live: liveCount,
+        live: actualLiveCount,
         cafe: cafeCount,
-        twitter: twitterCount
+        twitter: twitterCount,
+        weverse: weverseCount
       });
     } catch (error) {
       console.error('Failed to load filter counts:', error);
@@ -66,17 +81,40 @@ const NotificationHistory: React.FC<NotificationHistoryProps> = ({
       setIsLoading(true);
       
       const offset = (page - 1) * itemsPerPage;
-      const options = {
-        limit: itemsPerPage,
-        offset,
-        type: filterType === 'all' ? undefined : filterType
-      };
       
-      // 총 개수와 페이지네이션된 데이터를 동시에 가져오기
-      const [notificationsData, totalCountData] = await Promise.all([
-        window.electronAPI.getNotifications(options),
-        window.electronAPI.getTotalNotificationCount({ type: filterType === 'all' ? undefined : filterType })
-      ]);
+      let notificationsData: NotificationRecord[];
+      let totalCountData: number;
+      
+      if (filterType === 'weverse') {
+        // 위버스 필터의 경우 클라이언트 사이드에서 필터링
+        const allNotifications = await window.electronAPI.getNotifications({ type: 'all' });
+        const weverseNotifications = allNotifications.filter(isWeverseNotification);
+        
+        notificationsData = weverseNotifications.slice(offset, offset + itemsPerPage);
+        totalCountData = weverseNotifications.length;
+      } else if (filterType === 'live') {
+        // 라이브 필터의 경우 위버스 제외
+        const allNotifications = await window.electronAPI.getNotifications({ type: 'live' });
+        const actualLiveNotifications = allNotifications.filter((n: NotificationRecord) => !isWeverseNotification(n));
+        
+        notificationsData = actualLiveNotifications.slice(offset, offset + itemsPerPage);
+        totalCountData = actualLiveNotifications.length;
+      } else {
+        // 기존 로직 유지
+        const options = {
+          limit: itemsPerPage,
+          offset,
+          type: filterType === 'all' ? undefined : filterType
+        };
+        
+        const [notifications, totalCount] = await Promise.all([
+          window.electronAPI.getNotifications(options),
+          window.electronAPI.getTotalNotificationCount({ type: filterType === 'all' ? undefined : filterType })
+        ]);
+        
+        notificationsData = notifications;
+        totalCountData = totalCount;
+      }
       
       setPaginatedNotifications(notificationsData);
       setTotalCount(totalCountData);
@@ -327,8 +365,12 @@ const NotificationHistory: React.FC<NotificationHistoryProps> = ({
     }
   };
 
-  const getTypeIcon = (type: string) => {
-    switch (type) {
+  const getTypeIcon = (notification: NotificationRecord) => {
+    if (isWeverseNotification(notification)) {
+      return '🎵';
+    }
+    
+    switch (notification.type) {
       case 'live': return '📺';
       case 'cafe': return '💬';
       case 'twitter': return '🐦';
@@ -336,8 +378,12 @@ const NotificationHistory: React.FC<NotificationHistoryProps> = ({
     }
   };
 
-  const getTypeColor = (type: string) => {
-    switch (type) {
+  const getTypeColor = (notification: NotificationRecord) => {
+    if (isWeverseNotification(notification)) {
+      return 'text-purple-400';
+    }
+    
+    switch (notification.type) {
       case 'live': return 'text-red-400';
       case 'cafe': return 'text-green-400';
       case 'twitter': return 'text-blue-400';
@@ -448,9 +494,11 @@ const NotificationHistory: React.FC<NotificationHistoryProps> = ({
             <div className="text-sm text-gray-300 max-h-48 overflow-y-auto custom-scrollbar">
               <div className="flex items-center space-x-2 mb-3">
                 <div className="font-medium text-white">본문 미리보기</div>
-                <div className={`text-xs px-2 py-1 rounded ${getTypeColor(notification.type)} bg-opacity-20`}>
-                  {notification.type === 'live' ? '라이브' : 
-                   notification.type === 'cafe' ? '카페' : '트위터'}
+                <div className={`text-xs px-2 py-1 rounded ${getTypeColor(notification)} bg-opacity-20`}>
+                  {isWeverseNotification(notification) ? '위버스' :
+                   notification.type === 'live' ? '라이브' : 
+                   notification.type === 'cafe' ? '카페' : 
+                   notification.type === 'twitter' ? '트위터' : '기타'}
                 </div>
               </div>
               <div className="whitespace-pre-wrap break-words leading-relaxed">
@@ -521,7 +569,8 @@ const NotificationHistory: React.FC<NotificationHistoryProps> = ({
                 { key: 'all', label: '🔍 전체', count: filterCounts.all },
                 { key: 'live', label: '📺 방송', count: filterCounts.live },
                 { key: 'cafe', label: '💬 카페', count: filterCounts.cafe },
-                { key: 'twitter', label: '🐦 트위터', count: filterCounts.twitter }
+                { key: 'twitter', label: '🐦 트위터', count: filterCounts.twitter },
+                { key: 'weverse', label: '🎵 위버스', count: filterCounts.weverse }
               ].map((item) => (
                 <button
                   key={item.key}
@@ -556,7 +605,10 @@ const NotificationHistory: React.FC<NotificationHistoryProps> = ({
                   <NotificationTooltip key={notification.id} notification={notification}>
                     <div
                       className="card hover-lift cursor-pointer"
-                      onClick={async () => {
+                      onClick={async (event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        
                         // 읽지않은 알림인 경우 읽음 처리
                         if (!notification.isRead) {
                           try {
@@ -578,7 +630,9 @@ const NotificationHistory: React.FC<NotificationHistoryProps> = ({
                           }
                         }
                         
+                        // URL 열기 - 별도의 명시적 사용자 액션으로 처리
                         if (notification.url) {
+                          console.log('🔗 Opening URL from notification history:', notification.url);
                           window.electronAPI.openExternal(notification.url);
                         }
                       }}
@@ -617,8 +671,8 @@ const NotificationHistory: React.FC<NotificationHistoryProps> = ({
                                 👤
                               </div>
                               {/* 플랫폼 뱃지 */}
-                              <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full flex items-center justify-center text-xs ${getTypeColor(notification.type)} bg-gray-900 border border-white/30`}>
-                                {getTypeIcon(notification.type)}
+                              <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full flex items-center justify-center text-xs ${getTypeColor(notification)} bg-gray-900 border border-white/30`}>
+                                {getTypeIcon(notification)}
                               </div>
                             </div>
                           ) : (
@@ -628,8 +682,8 @@ const NotificationHistory: React.FC<NotificationHistoryProps> = ({
                                 👤
                               </div>
                               {/* 플랫폼 뱃지 */}
-                              <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full flex items-center justify-center text-xs ${getTypeColor(notification.type)} bg-gray-900 border border-white/30`}>
-                                {getTypeIcon(notification.type)}
+                              <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full flex items-center justify-center text-xs ${getTypeColor(notification)} bg-gray-900 border border-white/30`}>
+                                {getTypeIcon(notification)}
                               </div>
                             </div>
                           )}
@@ -662,9 +716,11 @@ const NotificationHistory: React.FC<NotificationHistoryProps> = ({
                           )}
                           
                           <div className="flex items-center mt-2 text-xs text-gray-500">
-                            <span className={`px-2 py-1 rounded ${getTypeColor(notification.type)} bg-opacity-20`}>
-                              {notification.type === 'live' ? '라이브' : 
-                               notification.type === 'cafe' ? '카페' : '트위터'}
+                            <span className={`px-2 py-1 rounded ${getTypeColor(notification)} bg-opacity-20`}>
+                              {isWeverseNotification(notification) ? '위버스' :
+                               notification.type === 'live' ? '라이브' : 
+                               notification.type === 'cafe' ? '카페' : 
+                               notification.type === 'twitter' ? '트위터' : '기타'}
                             </span>
                             {notification.url && (
                               <span className="ml-2">🔗 클릭하여 열기</span>

@@ -10,6 +10,7 @@ interface SidebarProps {
 
 interface Settings {
   needNaverLogin?: boolean;
+  needWeverseLogin?: boolean;
   [key: string]: any;
 }
 
@@ -115,6 +116,13 @@ const Sidebar: React.FC<SidebarProps> = ({ stats, onNaverActionStart, onNaverAct
       label: '스트리머 관리',
       description: '모니터링할 스트리머 추가/편집',
       primary: true
+    },
+    {
+      path: '/weverse',
+      icon: '🎵',
+      label: '위버스 관리',
+      description: '위버스 아티스트 알림 설정',
+      primary: false
     },
     {
       path: '/notifications',
@@ -225,29 +233,42 @@ const Sidebar: React.FC<SidebarProps> = ({ stats, onNaverActionStart, onNaverAct
         </ul>
       </nav>
 
-      {/* 빠른 액션 */}
+      {/* 로그인 상태 */}
       <div className="p-4 border-t border-white/10">
         <div className="mb-2">
-          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">빠른 액션</h3>
+          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">로그인 상태</h3>
         </div>
         {isLoadingSettings ? (
-          <div className="w-full text-xs btn btn-ghost btn-sm cursor-not-allowed">
+          <div className="text-xs text-gray-400 text-center">
             <span className="spinner spinner-sm mr-1"></span>
             설정 로드 중...
           </div>
         ) : (
-          <button
-            onClick={handleNaverAction}
-            className={`w-full text-xs ${
-              settings?.needNaverLogin === true 
-                ? 'btn btn-warning btn-sm' 
-                : 'btn-subtle'
-            }`}
-            title={settings?.needNaverLogin === true ? "네이버 로그인 필요" : "네이버 로그아웃"}
-            disabled={isLoadingSettings}
-          >
-            {settings?.needNaverLogin === true ? '🔐 네이버 로그인' : '🚪 로그아웃'}
-          </button>
+          <div className="space-y-2">
+            {/* 네이버 로그인 상태 */}
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-gray-400">네이버</span>
+              <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                !settings?.needNaverLogin 
+                  ? 'bg-green-500/20 text-green-300 border border-green-500/30' 
+                  : 'bg-red-500/20 text-red-300 border border-red-500/30'
+              }`}>
+                {!settings?.needNaverLogin ? '로그인됨' : '미로그인'}
+              </span>
+            </div>
+            
+            {/* 위버스 로그인 상태 */}
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-gray-400">위버스</span>
+              <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                !settings?.needWeverseLogin 
+                  ? 'bg-green-500/20 text-green-300 border border-green-500/30' 
+                  : 'bg-red-500/20 text-red-300 border border-red-500/30'
+              }`}>
+                {!settings?.needWeverseLogin ? '로그인됨' : '미로그인'}
+              </span>
+            </div>
+          </div>
         )}
       </div>
 

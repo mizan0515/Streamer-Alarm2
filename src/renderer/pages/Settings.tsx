@@ -9,6 +9,7 @@ interface SettingsData {
   cacheCleanupInterval: number;
   theme: string;
   needNaverLogin: boolean;
+  needWeverseLogin: boolean;
 }
 
 interface SettingsProps {
@@ -25,7 +26,8 @@ const Settings: React.FC<SettingsProps> = ({ onNaverActionStart, onNaverActionEn
     showDesktopNotifications: true,
     cacheCleanupInterval: 3600,
     theme: 'dark',
-    needNaverLogin: true
+    needNaverLogin: true,
+    needWeverseLogin: true
   });
   
   const [isLoading, setIsLoading] = useState(true);
@@ -153,6 +155,42 @@ const Settings: React.FC<SettingsProps> = ({ onNaverActionStart, onNaverActionEn
       alert('네이버 로그아웃 중 오류가 발생했습니다.');
     } finally {
       onNaverActionEnd?.();
+    }
+  };
+
+  const handleWeverseLogin = async () => {
+    try {
+      const result = await window.electronAPI.weverseLogin();
+      if (result) {
+        alert('위버스 로그인이 완료되었습니다.');
+        // 설정 새로고침
+        loadSettings();
+      } else {
+        alert('위버스 로그인에 실패했습니다.');
+      }
+    } catch (error) {
+      console.error('Failed to login to Weverse:', error);
+      alert('위버스 로그인 중 오류가 발생했습니다.');
+    }
+  };
+
+  const handleWeverseLogout = async () => {
+    if (!confirm('위버스에서 로그아웃하시겠습니까? 위버스 모니터링이 중단됩니다.')) {
+      return;
+    }
+
+    try {
+      const result = await window.electronAPI.weverseLogout();
+      if (result) {
+        alert('위버스 로그아웃이 완료되었습니다.');
+        // 설정 새로고침
+        loadSettings();
+      } else {
+        alert('위버스 로그아웃에 실패했습니다.');
+      }
+    } catch (error) {
+      console.error('Failed to logout from Weverse:', error);
+      alert('위버스 로그아웃 중 오류가 발생했습니다.');
     }
   };
 
@@ -323,6 +361,35 @@ const Settings: React.FC<SettingsProps> = ({ onNaverActionStart, onNaverActionEn
                 </div>
                 <p className="text-xs text-gray-400 mt-1">
                   카페 모니터링을 위해 네이버 로그인이 필요합니다
+                </p>
+              </div>
+
+              <div className="border-t border-gray-700 pt-4">
+                <h3 className="text-sm font-medium text-gray-300 mb-2">위버스 로그인 상태</h3>
+                <div className="flex items-center justify-between">
+                  <span className={`text-sm ${settings.needWeverseLogin ? 'text-red-400' : 'text-green-400'}`}>
+                    {settings.needWeverseLogin ? '로그인 필요' : '로그인됨'}
+                  </span>
+                  {settings.needWeverseLogin ? (
+                    <button
+                      onClick={handleWeverseLogin}
+                      className="btn btn-primary btn-sm"
+                      disabled={isSaving}
+                    >
+                      🎵 위버스 로그인
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleWeverseLogout}
+                      className="btn btn-ghost btn-sm"
+                      disabled={isSaving}
+                    >
+                      🚪 위버스 로그아웃
+                    </button>
+                  )}
+                </div>
+                <p className="text-xs text-gray-400 mt-1">
+                  위버스 아티스트 알림 모니터링을 위해 위버스 로그인이 필요합니다
                 </p>
               </div>
 

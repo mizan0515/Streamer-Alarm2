@@ -32,6 +32,13 @@ const electronAPI = {
   // 네이버 로그인/로그아웃
   naverLogin: () => ipcRenderer.invoke('naver-login'),
   naverLogout: () => ipcRenderer.invoke('naver-logout'),
+  
+  // 위버스 로그인/로그아웃 및 아티스트 관리
+  weverseLogin: () => ipcRenderer.invoke('weverse-login'),
+  weverseLogout: () => ipcRenderer.invoke('weverse-logout'),
+  getWeverseArtists: () => ipcRenderer.invoke('get-weverse-artists'),
+  updateWeverseArtist: (data: { artistName: string; isEnabled: boolean }) => ipcRenderer.invoke('update-weverse-artist', data),
+  refreshWeverseArtists: () => ipcRenderer.invoke('refresh-weverse-artists'),
 
   // 유틸리티
   openExternal: (url: string) => ipcRenderer.invoke('open-external', url),
@@ -80,18 +87,112 @@ const electronAPI = {
   },
 
   // 앱 정보
-  getAppVersion: () => process.env.npm_package_version || '2.0.0',
+  getAppVersion: () => {
+    try {
+      return require('../../package.json').version;
+    } catch {
+      return '2.1.0';
+    }
+  },
   getPlatform: () => process.platform,
   
   // 개발 환경 감지
   isDev: () => process.env.NODE_ENV === 'development',
   
   // 자동 시작 디버깅
-  getAutoStartDebug: () => ipcRenderer.invoke('get-auto-start-debug')
+  getAutoStartDebug: () => ipcRenderer.invoke('get-auto-start-debug'),
+  
+  // 위버스 데이터 클리어 (개발자 콘솔용)
+  clearWeverseData: () => ipcRenderer.invoke('clear-weverse-data'),
+  clearWeverseArtists: () => ipcRenderer.invoke('clear-weverse-artists'),
+  resetWeverseNotifications: () => ipcRenderer.invoke('reset-weverse-notifications'),
+  diagnosticWeverseDatabase: () => ipcRenderer.invoke('diagnostic-weverse-database')
 };
 
 // Context Bridge를 통해 안전하게 API 노출
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);
+
+// 개발자 콘솔 명령어 추가 (프로덕션 환경에서도 사용 가능)
+contextBridge.exposeInMainWorld('clearWeverseData', async () => {
+  console.log('🧹 위버스 알림 데이터 클리어 중...');
+  try {
+    const result = await electronAPI.clearWeverseData();
+    if (result.success) {
+      console.log('✅ 위버스 알림 데이터 클리어 완료');
+    } else {
+      console.error('❌ 위버스 알림 데이터 클리어 실패:', result.error);
+    }
+    return result;
+  } catch (error) {
+    console.error('❌ 위버스 알림 데이터 클리어 실패:', error);
+    return { success: false, error: String(error) };
+  }
+});
+
+contextBridge.exposeInMainWorld('clearWeverseArtists', async () => {
+  console.log('🧹 위버스 아티스트 데이터 클리어 중...');
+  try {
+    const result = await electronAPI.clearWeverseArtists();
+    if (result.success) {
+      console.log('✅ 위버스 아티스트 데이터 클리어 완료');
+    } else {
+      console.error('❌ 위버스 아티스트 데이터 클리어 실패:', result.error);
+    }
+    return result;
+  } catch (error) {
+    console.error('❌ 위버스 아티스트 데이터 클리어 실패:', error);
+    return { success: false, error: String(error) };
+  }
+});
+
+contextBridge.exposeInMainWorld('resetWeverseNotifications', async () => {
+  console.log('🔄 위버스 알림을 live 타입으로 변경 중...');
+  try {
+    const result = await electronAPI.resetWeverseNotifications();
+    if (result.success) {
+      console.log('✅ 위버스 알림 타입 변경 완료');
+    } else {
+      console.error('❌ 위버스 알림 타입 변경 실패:', result.error);
+    }
+    return result;
+  } catch (error) {
+    console.error('❌ 위버스 알림 타입 변경 실패:', error);
+    return { success: false, error: String(error) };
+  }
+});
+
+// 위버스 아티스트 데이터베이스 검증 명령어 추가
+contextBridge.exposeInMainWorld('debugWeverseArtists', async () => {
+  console.log('🔍 위버스 아티스트 데이터베이스 상태 확인 중...');
+  try {
+    const artists = await electronAPI.getWeverseArtists();
+    console.log('📊 위버스 아티스트 목록:', artists);
+    return artists;
+  } catch (error) {
+    console.error('❌ 위버스 아티스트 데이터 조회 실패:', error);
+    return { success: false, error: String(error) };
+  }
+});
+
+// 위버스 데이터베이스 진단 도구
+contextBridge.exposeInMainWorld('diagnosticWeverseDatabase', async () => {
+  console.log('🔍 위버스 데이터베이스 진단 중...');
+  try {
+    const result = await electronAPI.diagnosticWeverseDatabase();
+    if (result.success) {
+      console.log('📊 진단 결과:', result.data);
+      console.log('📊 weverse_artists 테이블:', result.data.weverseArtistsTable);
+      console.log('📊 FOREIGN KEY 상태:', result.data.foreignKeyStatus);
+      console.log('📊 데이터베이스 무결성:', result.data.integrityCheck);
+    } else {
+      console.error('❌ 진단 실패:', result.error);
+    }
+    return result;
+  } catch (error) {
+    console.error('❌ 위버스 데이터베이스 진단 실패:', error);
+    return { success: false, error: String(error) };
+  }
+});
 
 // TypeScript 타입 선언 (renderer 프로세스에서 사용)
 declare global {
