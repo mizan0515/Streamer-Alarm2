@@ -161,11 +161,13 @@ export class NotificationService {
           this.notificationProcessingInProgress.add(recentNotification.uniqueKey);
           
           try {
+            // 먼저 알림을 읽음 처리 (URL 열기 전에)
+            await this.markNotificationAsReadByUniqueKey(recentNotification.uniqueKey);
+            console.log(`[GLOBAL_CLICK] Notification marked as read: ${recentNotification.uniqueKey}`);
+            
+            // 그 다음 URL 열기
             await shell.openExternal(recentNotification.url);
             console.log(`[GLOBAL_CLICK] Successfully opened URL: ${recentNotification.url}`);
-            
-            // 알림을 읽음 처리
-            await this.markNotificationAsReadByUniqueKey(recentNotification.uniqueKey);
             
             // 처리 완료 표시
             this.processedNotifications.add(recentNotification.uniqueKey);
@@ -174,10 +176,15 @@ export class NotificationService {
             this.activeNotifications.delete(recentNotification.uniqueKey);
           } catch (urlError) {
             console.error(`[GLOBAL_CLICK] Failed to open URL:`, urlError);
+            // URL 열기 실패해도 읽음 처리는 유지
           } finally {
             // 처리 중 상태 제거
             this.notificationProcessingInProgress.delete(recentNotification.uniqueKey);
           }
+        } else {
+          console.log(`[GLOBAL_CLICK] No URL to open, but marking as read: ${recentNotification.uniqueKey}`);
+          // URL이 없어도 읽음 처리
+          await this.markNotificationAsReadByUniqueKey(recentNotification.uniqueKey);
         }
       } else {
         console.log(`[GLOBAL_CLICK] No active notifications found to process`);
@@ -286,46 +293,43 @@ export class NotificationService {
         console.log(`[CALLBACK] *** USER CLICKED NOTIFICATION ***`);
         console.log(`[CALLBACK] Opening URL for: ${data.uniqueKey}`);
         
-        if (data.url) {
-          // 처리 시작 표시
-          this.notificationProcessingInProgress.add(data.uniqueKey);
+        // 처리 시작 표시
+        this.notificationProcessingInProgress.add(data.uniqueKey);
+        
+        try {
+          // 먼저 알림을 읽음 처리 (URL 열기 전에)
+          await this.markNotificationAsReadByUniqueKey(data.uniqueKey);
+          console.log(`[CALLBACK] Notification marked as read: ${data.uniqueKey}`);
           
-          try {
-            await shell.openExternal(data.url);
-            console.log(`[CALLBACK] Successfully opened URL via callback: ${data.url}`);
-            
-            // 알림을 읽음 처리
-            await this.markNotificationAsReadByUniqueKey(data.uniqueKey);
-            
-            // 처리 완료 표시
-            this.processedNotifications.add(data.uniqueKey);
-            
-            // 처리된 알림은 활성 목록에서 제거
-            this.activeNotifications.delete(data.uniqueKey);
-          } catch (urlError) {
-            console.error(`[CALLBACK] Failed to open URL:`, urlError);
-            
-            // 폴백: Windows 직접 실행
-            if (process.platform === 'win32') {
-              try {
-                const { spawn } = require('child_process');
-                spawn('rundll32', ['url.dll,FileProtocolHandler', data.url], { detached: true });
-                console.log(`[CALLBACK] Fallback URL open successful: ${data.url}`);
-                
-                // 알림을 읽음 처리
-                await this.markNotificationAsReadByUniqueKey(data.uniqueKey);
-                
-                // 성공시 처리 완료 표시
-                this.processedNotifications.add(data.uniqueKey);
-                this.activeNotifications.delete(data.uniqueKey);
-              } catch (fallbackError) {
-                console.error(`[CALLBACK] Fallback failed:`, fallbackError);
+          if (data.url) {
+            try {
+              await shell.openExternal(data.url);
+              console.log(`[CALLBACK] Successfully opened URL via callback: ${data.url}`);
+            } catch (urlError) {
+              console.error(`[CALLBACK] Failed to open URL:`, urlError);
+              
+              // 폴백: Windows 직접 실행
+              if (process.platform === 'win32') {
+                try {
+                  const { spawn } = require('child_process');
+                  spawn('rundll32', ['url.dll,FileProtocolHandler', data.url], { detached: true });
+                  console.log(`[CALLBACK] Fallback URL open successful: ${data.url}`);
+                } catch (fallbackError) {
+                  console.error(`[CALLBACK] Fallback failed:`, fallbackError);
+                }
               }
             }
-          } finally {
-            // 처리 중 상태 제거
-            this.notificationProcessingInProgress.delete(data.uniqueKey);
           }
+          
+          // 처리 완료 표시
+          this.processedNotifications.add(data.uniqueKey);
+          this.activeNotifications.delete(data.uniqueKey);
+          
+        } catch (error) {
+          console.error(`[CALLBACK] Error in callback processing:`, error);
+        } finally {
+          // 처리 중 상태 제거
+          this.notificationProcessingInProgress.delete(data.uniqueKey);
         }
       } else {
         console.log(`[CALLBACK] No user interaction detected (response: ${response})`);
@@ -614,17 +618,20 @@ export class NotificationService {
               this.notificationProcessingInProgress.add(data.uniqueKey);
               
               try {
+                // 먼저 알림을 읽음 처리 (URL 열기 전에)
+                await this.markNotificationAsReadByUniqueKey(data.uniqueKey);
+                console.log(`[WINDOWS] Notification marked as read: ${data.uniqueKey}`);
+                
+                // 그 다음 URL 열기
                 await shell.openExternal(data.url!);
                 console.log(`[WINDOWS] Successfully opened URL: ${data.url}`);
-                
-                // 알림을 읽음 처리
-                await this.markNotificationAsReadByUniqueKey(data.uniqueKey);
                 
                 // 처리 완료 표시
                 this.processedNotifications.add(data.uniqueKey);
                 this.activeNotifications.delete(data.uniqueKey);
               } catch (urlError) {
                 console.error(`[WINDOWS] Failed to open URL:`, urlError);
+                // URL 열기 실패해도 읽음 처리는 유지
               } finally {
                 // 처리 중 상태 제거
                 this.notificationProcessingInProgress.delete(data.uniqueKey);
@@ -686,20 +693,21 @@ export class NotificationService {
                 this.notificationProcessingInProgress.add(data.uniqueKey);
                 
                 try {
+                  // 먼저 알림을 읽음 처리 (URL 열기 전에)
+                  await this.markNotificationAsReadByUniqueKey(data.uniqueKey);
+                  console.log(`[ELECTRON] Notification marked as read: ${data.uniqueKey}`);
+                  
                   // URL 안전 처리 (사용자 클릭 시에만)
                   if (data.url && typeof data.url === 'string') {
                     await shell.openExternal(data.url);
                     console.log(`[ELECTRON] ✅ URL opened by user click: ${data.url}`);
-                    
-                    // 알림을 읽음 처리
-                    await this.markNotificationAsReadByUniqueKey(data.uniqueKey);
-                    
-                    // 처리 완료 표시
-                    this.processedNotifications.add(data.uniqueKey);
-                    this.activeNotifications.delete(data.uniqueKey);
                   } else {
                     console.log(`[ELECTRON] No URL to open for notification: ${data.uniqueKey}`);
                   }
+                  
+                  // 처리 완료 표시
+                  this.processedNotifications.add(data.uniqueKey);
+                  this.activeNotifications.delete(data.uniqueKey);
                 } catch (error) {
                   console.error(`[ELECTRON] ❌ Failed to open URL:`, error);
                 } finally {
@@ -987,6 +995,24 @@ export class NotificationService {
     };
   }
 
+  createTitleChangeNotification(
+    streamerName: string,
+    previousTitle: string,
+    newTitle: string,
+    url: string,
+    profileImageUrl?: string
+  ): NotificationData {
+    return {
+      type: 'live',
+      streamerName,
+      title: `📝 ${streamerName}님이 방송 제목을 변경했습니다`,
+      content: `${previousTitle} → ${newTitle}`,
+      url,
+      profileImageUrl,
+      uniqueKey: `title_change_${streamerName}_${Date.now()}`
+    };
+  }
+
   createCafeNotification(
     streamerName: string,
     postTitle: string,
@@ -1170,20 +1196,26 @@ export class NotificationService {
     try {
       console.log(`[MARK_READ] 📖 Attempting to mark notification as read: ${uniqueKey}`);
       
-      // uniqueKey로 알림 찾아서 읽음 처리
-      const notifications = await this.databaseManager.getNotifications();
+      // uniqueKey로 알림 찾아서 읽음 처리 (더 포괄적인 조회)
+      const notifications = await this.databaseManager.getNotifications({ limit: 1000 });
       const notification = notifications.find(n => n.uniqueKey === uniqueKey);
       
       console.log(`[MARK_READ] Found notification:`, {
         found: !!notification,
         id: notification?.id,
         isRead: notification?.isRead,
-        uniqueKey: notification?.uniqueKey
+        uniqueKey: notification?.uniqueKey,
+        type: notification?.type,
+        title: notification?.title?.substring(0, 50)
       });
       
-      if (notification && !notification.isRead) {
-        await this.databaseManager.markNotificationAsRead(notification.id);
-        console.log(`[MARK_READ] ✅ Marked notification as read: ${uniqueKey} (ID: ${notification.id})`);
+      if (notification) {
+        if (!notification.isRead) {
+          await this.databaseManager.markNotificationAsRead(notification.id);
+          console.log(`[MARK_READ] ✅ Marked notification as read: ${uniqueKey} (ID: ${notification.id})`);
+        } else {
+          console.log(`[MARK_READ] ℹ️ Notification already marked as read: ${uniqueKey} (ID: ${notification.id})`);
+        }
         
         // UI 업데이트를 위해 메인 윈도우에 알림 (안정성 강화)
         try {
@@ -1206,9 +1238,18 @@ export class NotificationService {
         } catch (uiUpdateError) {
           console.error(`[UI_UPDATE] Failed to update UI after marking notification as read:`, uiUpdateError);
         }
+      } else {
+        console.error(`[MARK_READ] ❌ Notification not found with uniqueKey: ${uniqueKey}`);
+        
+        // 디버깅을 위한 추가 정보
+        console.log(`[MARK_READ] Debug info:`, {
+          totalNotifications: notifications.length,
+          sampleUniqueKeys: notifications.slice(0, 5).map(n => n.uniqueKey),
+          searchedUniqueKey: uniqueKey
+        });
       }
     } catch (error) {
-      console.error('Failed to mark notification as read:', error);
+      console.error(`[MARK_READ] ❌ Failed to mark notification as read:`, error);
     }
   }
 

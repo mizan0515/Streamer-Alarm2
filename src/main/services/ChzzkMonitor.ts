@@ -49,6 +49,8 @@ export class ChzzkMonitor {
   private databaseManager: DatabaseManager;
   private notificationService: NotificationService;
   private previousLiveStatus: Map<string, boolean> = new Map();
+  private previousLiveTitle: Map<string, string> = new Map();
+  private monitoringService?: any; // MonitoringService 참조
 
   constructor(databaseManager: DatabaseManager, notificationService: NotificationService) {
     this.databaseManager = databaseManager;
@@ -163,6 +165,7 @@ export class ChzzkMonitor {
     // 데이터베이스에서 이전 상태 조회
     const previousState = await this.databaseManager.getMonitorState(streamer.id, 'chzzk');
     const previousStatus = previousState?.lastStatus === 'live';
+    const previousTitle = this.previousLiveTitle.get(streamer.id.toString());
     
     // 🚨 NEW: 새 스트리머 초기화 처리 (라이브 알림은 허용, 오프라인 상태만 차단)
     const isNewStreamer = !previousState;
@@ -179,6 +182,9 @@ export class ChzzkMonitor {
       
       // 메모리 캐시도 업데이트
       this.previousLiveStatus.set(streamer.id.toString(), currentStatus.isLive);
+      if (currentStatus.isLive && currentStatus.title) {
+        this.previousLiveTitle.set(streamer.id.toString(), currentStatus.title);
+      }
       
       if (currentStatus.isLive) {
         console.log(`🎉 ${streamer.name}: 새 스트리머 라이브 중 감지 - 라이브 알림 허용`);
@@ -189,12 +195,12 @@ export class ChzzkMonitor {
       }
     }
     
+    // 최신 스트리머 정보 다시 조회 (알림 설정 동기화)
+    const latestStreamers = await this.databaseManager.getStreamers();
+    const latestStreamer = latestStreamers.find(s => s.id === streamer.id);
+    
     // 상태가 변경되었고, 라이브가 시작된 경우에만 알림 발송
     if (!previousStatus && currentStatus.isLive) {
-      // 최신 스트리머 정보 다시 조회 (알림 설정 동기화)
-      const latestStreamers = await this.databaseManager.getStreamers();
-      const latestStreamer = latestStreamers.find(s => s.id === streamer.id);
-      
       // 스트리머별 알림 설정 확인 (최신 정보 기준)
       if (latestStreamer?.notifications?.chzzk && latestStreamer.isActive) {
         const notification = this.notificationService.createLiveNotification(
@@ -206,6 +212,27 @@ export class ChzzkMonitor {
 
         await this.notificationService.sendNotification(notification);
         console.log(`Live notification sent for ${streamer.name}`);
+      }
+    }
+    
+    // 🆕 라이브 방송 제목 변경 감지 및 알림
+    if (previousStatus && currentStatus.isLive && currentStatus.title && previousTitle) {
+      if (currentStatus.title !== previousTitle) {
+        console.log(`📝 ${streamer.name}: 방송 제목 변경 감지 - "${previousTitle}" → "${currentStatus.title}"`);
+        
+        // 스트리머별 알림 설정 확인 (최신 정보 기준)
+        if (latestStreamer?.notifications?.chzzk && latestStreamer.isActive) {
+          const notification = this.notificationService.createTitleChangeNotification(
+            latestStreamer.name,
+            previousTitle,
+            currentStatus.title,
+            currentStatus.url || `https://chzzk.naver.com/${latestStreamer.chzzkId}`,
+            latestStreamer.profileImageUrl
+          );
+
+          await this.notificationService.sendNotification(notification);
+          console.log(`Title change notification sent for ${streamer.name}`);
+        }
       }
     }
 
@@ -220,6 +247,14 @@ export class ChzzkMonitor {
 
       // 메모리 캐시도 업데이트 (호환성 유지)
       this.previousLiveStatus.set(streamer.id.toString(), currentStatus.isLive);
+    }
+    
+    // 제목 캐시 업데이트 (라이브 중일 때만)
+    if (currentStatus.isLive && currentStatus.title) {
+      this.previousLiveTitle.set(streamer.id.toString(), currentStatus.title);
+    } else if (!currentStatus.isLive) {
+      // 방송 종료 시 제목 캐시 정리
+      this.previousLiveTitle.delete(streamer.id.toString());
     }
   }
 
@@ -299,8 +334,14 @@ export class ChzzkMonitor {
     }
   }
 
+  // MonitoringService 참조 설정
+  setMonitoringService(monitoringService: any): void {
+    this.monitoringService = monitoringService;
+  }
+
   // 정리 작업
   cleanup(): void {
     this.previousLiveStatus.clear();
+    this.previousLiveTitle.clear();
   }
 }

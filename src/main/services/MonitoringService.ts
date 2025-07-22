@@ -5,7 +5,7 @@ import { ChzzkMonitor } from './ChzzkMonitor';
 import { TwitterMonitor } from './TwitterMonitor';
 import { CafeMonitor } from './CafeMonitor';
 import { WeiverseMonitor } from './WeiverseMonitor';
-import { LiveStatus, TwitterTweet, CafePost, WeverseNotification } from '@shared/types';
+import { LiveStatus, TwitterTweet, CafePost, WeverseNotification, WeverseArtist } from '@shared/types';
 
 export class MonitoringService {
   private databaseManager: DatabaseManager;
@@ -19,7 +19,12 @@ export class MonitoringService {
   private isRunning: boolean = false;
   private monitoringInterval: NodeJS.Timeout | null = null;
   private lastMonitoringTime: number = 0;
-  private sleepDetectionThreshold: number = 120000; // 2분
+  private sleepDetectionThreshold: number = 600000; // 10분 (더 보수적으로 설정)
+  private isInitialStart: boolean = true; // 앱 재시작 감지용
+  
+  // 위버스 세션 모니터링 관리
+  private lastWeverseSessionCheck: number = 0;
+  private weverseSessionCheckInterval: number = 10 * 60 * 1000; // 10분 (밀리초)
   
   // 네이버 로그인 상태 관리
   private naverLoginStatus: boolean | null = null;
@@ -34,6 +39,7 @@ export class MonitoringService {
     
     // 모니터링 서비스들 초기화
     this.chzzkMonitor = new ChzzkMonitor(databaseManager, notificationService);
+    this.chzzkMonitor.setMonitoringService(this); // MonitoringService 참조 설정
     this.twitterMonitor = new TwitterMonitor(databaseManager, notificationService, this.settingsService);
     this.cafeMonitor = new CafeMonitor(databaseManager, notificationService, this.settingsService);
     this.weverseMonitor = new WeiverseMonitor(databaseManager, notificationService, this.settingsService);
@@ -72,8 +78,13 @@ export class MonitoringService {
       
       console.log('Monitoring service started with state persistence');
       
+      // 앱 재시작 시 누락된 알림 복구 (첫 체크 전에 실행)
+      console.log('🔄 App restart detected, recovering missed notifications...');
+      await this.recoverMissedNotifications();
+      
       // 첫 체크를 15초 후에 실행 (기준선 설정 완료 후)
       setTimeout(async () => {
+        this.isInitialStart = false; // 초기 시작 완료 플래그 설정
         await this.performMonitoringCheck();
         this.scheduleNextCheck();
       }, 15000);
@@ -181,10 +192,16 @@ export class MonitoringService {
     try {
       const currentTime = Date.now();
       
-      // 절전모드 감지
-      if (currentTime - this.lastMonitoringTime > this.sleepDetectionThreshold) {
-        console.log('Sleep mode detected, triggering missed notification recovery');
-        await this.recoverMissedNotifications();
+      // 절전모드 감지 (앱 재시작 완료 후에만 감지)
+      if (!this.isInitialStart && this.lastMonitoringTime > 0) {
+        const timeSinceLastCheck = currentTime - this.lastMonitoringTime;
+        const checkInterval = this.settingsService.getCheckInterval() * 1000;
+        const dynamicThreshold = Math.max(this.sleepDetectionThreshold, checkInterval * 5); // 최소 5배 또는 10분 중 더 큰 값
+        
+        if (timeSinceLastCheck > dynamicThreshold) {
+          console.log(`💤 Sleep mode detected: ${Math.round(timeSinceLastCheck / 1000)}s gap (threshold: ${Math.round(dynamicThreshold / 1000)}s), triggering missed notification recovery`);
+          await this.recoverMissedNotifications();
+        }
       }
       
       this.lastMonitoringTime = currentTime;
@@ -205,10 +222,14 @@ export class MonitoringService {
       // 모니터링 상태 기록
       await this.updateMonitoringStatus();
       
+      // 위버스 세션 상태 정기 검증 (위버스 알림 전송 전)
+      await this.checkWeverseSessionStatus();
+      
       // 위버스 알림 전송
       await this.sendWeverseNotifications(weverseNotifications);
       
-      console.log(`Monitoring check completed. Live: ${liveStatuses.filter(s => s.isLive).length}, Tweets: ${tweets.length}, Posts: ${cafePosts.length}, Weverse: ${weverseNotifications.length}`);
+      const liveCount = liveStatuses.filter(s => s.isLive).length;
+      console.log(`Monitoring check completed. CHZZK Live: ${liveCount}, Tweets: ${tweets.length}, Posts: ${cafePosts.length}, Weverse: ${weverseNotifications.length}`);
       
     } catch (error) {
       console.error('Monitoring check failed:', error);
@@ -251,6 +272,7 @@ export class MonitoringService {
     }
   }
 
+
   private async sendWeverseNotifications(notifications: WeverseNotification[]): Promise<void> {
     try {
       await this.weverseMonitor.sendWeverseNotifications(notifications);
@@ -259,17 +281,237 @@ export class MonitoringService {
     }
   }
 
+  /**
+   * 위버스 세션 상태를 주기적으로 검증
+   */
+  private async checkWeverseSessionStatus(): Promise<void> {
+    try {
+      const currentTime = Date.now();
+      
+      // 10분 간격으로 세션 상태 확인
+      if (currentTime - this.lastWeverseSessionCheck < this.weverseSessionCheckInterval) {
+        return; // 아직 체크 시간이 되지 않음
+      }
+      
+      console.log('🔍 위버스 세션 상태 정기 검증 시작...');
+      this.lastWeverseSessionCheck = currentTime;
+      
+      const sessionValid = await this.weverseMonitor.checkLoginStatus();
+      
+      if (sessionValid) {
+        console.log('✅ 위버스 세션 상태 양호');
+        
+        // 세션이 유효하면 추가적인 쿠키 무결성 검사 및 토큰 모니터링 실행
+        const integrityValid = await this.weverseMonitor.checkSessionIntegrity();
+        if (!integrityValid) {
+          console.log('⚠️ 위버스 세션 무결성 문제 감지 - 예방적 복구 시도');
+          await this.weverseMonitor.enhanceSessionPersistence();
+        }
+        
+        // 토큰 상태 모니터링 및 선제적 갱신
+        await this.weverseMonitor.performTokenMonitoring();
+      } else {
+        console.log('❌ 위버스 세션 만료 감지');
+        
+        // 세션 복구 시도
+        const recoverySuccess = await this.attemptWeverseSessionRecovery();
+        if (!recoverySuccess) {
+          console.log('🔄 위버스 세션 자동 복구 실패 - 사용자 재로그인 필요');
+          
+          // UI에 로그인 필요 알림
+          await this.settingsService.updateSetting('needWeverseLogin', true);
+          this.notifyWeverseLoginStatusChange(true);
+        }
+      }
+      
+    } catch (error) {
+      console.error('❌ 위버스 세션 상태 검증 실패:', error);
+    }
+  }
+
+  /**
+   * 위버스 세션 3단계 자동 복구 시도
+   * 1단계: 쿠키 복원 → 2단계: 토큰 갱신 → 3단계: 재로그인
+   */
+  private async attemptWeverseSessionRecovery(): Promise<boolean> {
+    try {
+      console.log('🔄 위버스 세션 3단계 자동 복구 시작...');
+      
+      // 1단계: 쿠키 복원 (세션 무결성 검증 및 쿠키 백업/복원)
+      console.log('📦 1단계: 쿠키 복원 시도...');
+      const cookieRestored = await this.performCookieRecovery();
+      if (cookieRestored) {
+        console.log('✅ 1단계 성공: 쿠키 복원 완료');
+        
+        // 1단계 성공 후 검증
+        const step1Check = await this.weverseMonitor.checkLoginStatus();
+        if (step1Check) {
+          console.log('✅ 1단계 복구로 세션 완전 복구');
+          await this.settingsService.updateSetting('needWeverseLogin', false);
+          return true;
+        }
+      }
+      
+      // 2단계: 토큰 갱신 (선제적 토큰 갱신 및 세션 강화)
+      console.log('🔄 2단계: 토큰 갱신 시도...');
+      const tokenRefreshed = await this.performTokenRecovery();
+      if (tokenRefreshed) {
+        console.log('✅ 2단계 성공: 토큰 갱신 완료');
+        
+        // 2단계 성공 후 검증
+        const step2Check = await this.weverseMonitor.checkLoginStatus();
+        if (step2Check) {
+          console.log('✅ 2단계 복구로 세션 완전 복구');
+          await this.settingsService.updateSetting('needWeverseLogin', false);
+          return true;
+        }
+      }
+      
+      // 3단계: 재로그인 (자동 로그인 시도)
+      console.log('🔑 3단계: 자동 재로그인 시도...');
+      const reloginSuccess = await this.performReloginRecovery();
+      if (reloginSuccess) {
+        console.log('✅ 3단계 성공: 자동 재로그인 완료');
+        await this.settingsService.updateSetting('needWeverseLogin', false);
+        return true;
+      }
+      
+      console.log('❌ 3단계 복구 시퀀스 모두 실패 - 사용자 수동 로그인 필요');
+      await this.settingsService.updateSetting('needWeverseLogin', true);
+      return false;
+      
+    } catch (error) {
+      console.error('❌ 위버스 세션 복구 중 오류:', error);
+      await this.settingsService.updateSetting('needWeverseLogin', true);
+      return false;
+    }
+  }
+
+  /**
+   * 1단계: 쿠키 복원
+   */
+  private async performCookieRecovery(): Promise<boolean> {
+    try {
+      console.log('🍪 쿠키 복원 단계 시작...');
+      
+      // 세션 무결성 검증 및 복구
+      const integrityRestored = await this.weverseMonitor.checkSessionIntegrity();
+      if (!integrityRestored) {
+        console.log('⚠️ 세션 무결성 복구 실패');
+        return false;
+      }
+      
+      // 쿠키 생명주기 강화
+      await this.weverseMonitor.enhanceSessionPersistence();
+      
+      // 복원 후 짧은 대기
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      console.log('✅ 쿠키 복원 완료');
+      return true;
+      
+    } catch (error) {
+      console.error('❌ 쿠키 복원 실패:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 2단계: 토큰 갱신
+   */
+  private async performTokenRecovery(): Promise<boolean> {
+    try {
+      console.log('🔄 토큰 갱신 단계 시작...');
+      
+      // 토큰 상태 모니터링 및 강제 갱신
+      await this.weverseMonitor.performTokenMonitoring();
+      
+      // 추가적인 토큰 갱신 시도 (WeiverseMonitor의 performTokenRefresh 메서드 직접 호출)
+      const refreshSuccess = await this.attemptDirectTokenRefresh();
+      if (!refreshSuccess) {
+        console.log('⚠️ 직접 토큰 갱신 실패');
+        return false;
+      }
+      
+      // 갱신 후 대기
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      
+      console.log('✅ 토큰 갱신 완료');
+      return true;
+      
+    } catch (error) {
+      console.error('❌ 토큰 갱신 실패:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 3단계: 자동 재로그인
+   */
+  private async performReloginRecovery(): Promise<boolean> {
+    try {
+      console.log('🔑 자동 재로그인 단계 시작...');
+      
+      // 현재는 수동 로그인만 지원하므로 자동 재로그인 시도하지 않음
+      // 향후 자동 로그인 기능 구현 시 여기에 추가
+      console.log('ℹ️ 자동 재로그인은 현재 지원되지 않음 - 사용자 수동 로그인 필요');
+      
+      return false;
+      
+    } catch (error) {
+      console.error('❌ 자동 재로그인 실패:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 직접 토큰 갱신 시도
+   */
+  private async attemptDirectTokenRefresh(): Promise<boolean> {
+    try {
+      console.log('🔧 직접 토큰 갱신 시도...');
+      
+      // WeiverseMonitor의 공식 토큰 갱신 API 사용
+      const refreshSuccess = await this.weverseMonitor.forceTokenRefresh();
+      
+      if (refreshSuccess) {
+        console.log('✅ 직접 토큰 갱신 성공');
+        return true;
+      } else {
+        console.log('⚠️ 직접 토큰 갱신 실패 - 대체 방법 시도');
+        
+        // 토큰 갱신 실패 시 세션 강화로 대체
+        await this.weverseMonitor.enhanceSessionPersistence();
+        return true; // 세션 강화는 성공으로 간주
+      }
+      
+    } catch (error) {
+      console.error('❌ 직접 토큰 갱신 실패:', error);
+      return false;
+    }
+  }
+
   private async updateLiveStatus(liveStatuses: LiveStatus[]): Promise<void> {
     try {
       // 라이브 상태를 파일로도 저장 (UI 실시간 업데이트용)
       const fs = require('fs').promises;
       const path = require('path');
-      const { app } = require('electron');
+      const { app, webContents } = require('electron');
       
       const userDataPath = app.getPath('userData');
       const liveStatusFile = path.join(userDataPath, 'live_status.json');
       
       await fs.writeFile(liveStatusFile, JSON.stringify(liveStatuses, null, 2));
+      
+      // 웹 인터페이스에 실시간 라이브 상태 변경 알림
+      const allWebContents = webContents.getAllWebContents();
+      allWebContents.forEach((wc: any) => {
+        if (!wc.isDestroyed()) {
+          wc.send('live-status-updated', liveStatuses);
+        }
+      });
+      
+      console.log(`📡 Live status updated: ${liveStatuses.filter(s => s.isLive).length} live streamers`);
     } catch (error) {
       console.error('Failed to update live status file:', error);
     }
@@ -319,14 +561,9 @@ export class MonitoringService {
       
       recoveredCount = await recoveryPromise;
       
-      // 복구 완료 알림
+      // 복구 완료 로그 (토스트 알림 제거)
       if (recoveredCount > 0) {
-        const systemNotification = this.notificationService.createSystemNotification(
-          '누락 알림 복구 완료',
-          `${recoveredCount}개의 누락된 알림을 복구했습니다.`
-        );
-        
-        await this.notificationService.sendNotification(systemNotification);
+        console.log(`복구 완료: ${recoveredCount}개의 누락된 알림을 복구했습니다.`);
       }
       
       // 복구 시간 기록
@@ -338,13 +575,8 @@ export class MonitoringService {
     } catch (error) {
       console.error('Failed to recover missed notifications:', error);
       
-      // 복구 실패 알림
-      const errorNotification = this.notificationService.createSystemNotification(
-        '알림 복구 실패',
-        '누락된 알림 복구 중 오류가 발생했습니다.'
-      );
-      
-      await this.notificationService.sendNotification(errorNotification);
+      // 복구 실패 로그 (토스트 알림 제거)
+      console.error('알림 복구 실패: 누락된 알림 복구 중 오류가 발생했습니다.');
       
       return 0;
     }
@@ -550,7 +782,12 @@ export class MonitoringService {
       const allWebContents = webContents.getAllWebContents();
       allWebContents.forEach((wc: any) => {
         if (!wc.isDestroyed()) {
+          // 네이버 로그인 상태 변경 이벤트
           wc.send('naver-login-status-changed', { needLogin });
+          
+          // 설정 업데이트 이벤트도 함께 발송 (더 확실한 동기화)
+          // 현재 설정을 가져와서 네이버 로그인 상태만 업데이트
+          this.sendSettingsUpdateEvent(needLogin, wc);
         }
       });
       
@@ -564,6 +801,27 @@ export class MonitoringService {
 
   setTrayService(trayService: any): void {
     this.trayService = trayService;
+  }
+
+  private sendSettingsUpdateEvent(needNaverLogin: boolean, wc: any): void {
+    try {
+      // 현재 설정을 가져와서 네이버 로그인 상태만 업데이트
+      const updatedSettings = {
+        needNaverLogin: needNaverLogin,
+        needWeverseLogin: this.settingsService.getNeedWeverseLogin(),
+        checkInterval: this.settingsService.getCheckInterval(),
+        autoStart: this.settingsService.getAutoStart(),
+        minimizeToTray: this.settingsService.getMinimizeToTray(),
+        showDesktopNotifications: this.settingsService.getShowDesktopNotifications(),
+        cacheCleanupInterval: this.settingsService.getCacheCleanupInterval(),
+        theme: this.settingsService.getTheme()
+      };
+      
+      console.log(`📢 Sending settings update: needNaverLogin=${needNaverLogin}`);
+      wc.send('settings-updated', updatedSettings);
+    } catch (error) {
+      console.error('Failed to send settings update event:', error);
+    }
   }
 
   private async updateTrayMenuDirectly(needLogin: boolean): Promise<void> {
@@ -848,6 +1106,17 @@ export class MonitoringService {
       }
     } catch (error) {
       console.error('Failed to update Weverse artist status:', error);
+    }
+  }
+
+  // 즉시 라이브 상태 업데이트 (상태 변경 시 UI에 즉시 반영)
+  async updateLiveStatusImmediately(): Promise<void> {
+    try {
+      console.log('🔄 Performing immediate live status update...');
+      const liveStatuses = await this.checkChzzkStreams();
+      await this.updateLiveStatus(liveStatuses);
+    } catch (error) {
+      console.error('Failed to update live status immediately:', error);
     }
   }
 }

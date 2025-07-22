@@ -411,12 +411,12 @@ export class CafeMonitor {
         console.log('로그인 상태 유지 체크박스를 찾을 수 없습니다:', error instanceof Error ? error.message : String(error));
       }
       
-      // 사용자가 로그인할 때까지 대기 (최대 5분)
+      // 사용자가 로그인할 때까지 대기 (최대 3분)
       console.log('Waiting for user to login...');
       
       try {
-        // 로그인 완료 감지 (리다이렉트 확인)
-        await loginPage.waitForURL('https://www.naver.com/', { timeout: 300000 });
+        // 로그인 완료 감지 (리다이렉트 확인) - 5분에서 3분으로 단축
+        await loginPage.waitForURL('https://www.naver.com/', { timeout: 180000 });
         
         console.log('Login completed successfully');
         

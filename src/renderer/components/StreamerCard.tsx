@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { StreamerData } from '@shared/types';
+import { StreamerData, LiveStatus } from '@shared/types';
 
 interface StreamerCardProps {
   streamer: StreamerData;
+  liveStatus?: LiveStatus;
   onUpdate: (streamerData: StreamerData) => Promise<void>;
   onDelete: () => void;
   disabled: boolean;
@@ -10,6 +11,7 @@ interface StreamerCardProps {
 
 const StreamerCard: React.FC<StreamerCardProps> = ({
   streamer,
+  liveStatus,
   onUpdate,
   onDelete,
   disabled
@@ -32,18 +34,45 @@ const StreamerCard: React.FC<StreamerCardProps> = ({
     setIsModalOpen(true);
   };
 
+  const handleLiveClick = () => {
+    if (liveStatus?.isLive && liveStatus.url) {
+      window.electronAPI?.openExternal(liveStatus.url);
+    }
+  };
+
   return (
     <>
       {/* 스트리머 카드 */}
-    <div className={`glass-card p-6 hover-lift transition-all duration-300 ${!streamer.isActive ? 'opacity-60' : 'hover-glow'}`}>
+    <div className={`glass-card p-6 hover-lift transition-all duration-300 ${
+      liveStatus?.isLive 
+        ? 'ring-2 ring-red-500 shadow-lg shadow-red-500/20' 
+        : !streamer.isActive 
+          ? 'opacity-60' 
+          : 'hover-glow'
+    }`}>
       <div className="space-y-6">
+        
         <div className="flex items-start justify-between">
           <div className="flex items-center space-x-4">
             {streamer.profileImageUrl ? (
               <img
                 src={streamer.profileImageUrl}
                 alt={streamer.name}
-                className="w-16 h-16 rounded-full object-cover border-2 border-white/20 shadow-lg"
+                className={`w-16 h-16 rounded-full object-cover border-2 shadow-lg transition-all duration-300 ${
+                  liveStatus?.isLive 
+                    ? 'border-red-500 shadow-red-500/50 cursor-pointer hover:scale-105 hover:shadow-red-500/70 live-glow-intense focus:outline-none focus:ring-2 focus:ring-red-500' 
+                    : 'border-white/20'
+                }`}
+                onClick={liveStatus?.isLive ? handleLiveClick : undefined}
+                onKeyDown={(e) => {
+                  if (liveStatus?.isLive && (e.key === 'Enter' || e.key === ' ')) {
+                    e.preventDefault();
+                    handleLiveClick();
+                  }
+                }}
+                tabIndex={liveStatus?.isLive ? 0 : -1}
+                role={liveStatus?.isLive ? 'button' : undefined}
+                aria-label={liveStatus?.isLive ? `${streamer.name} 라이브 방송 보러가기` : undefined}
                 onError={(e) => {
                   // 이미지 로드 실패 시 기본 아이콘으로 대체
                   const target = e.target as HTMLImageElement;
@@ -53,13 +82,39 @@ const StreamerCard: React.FC<StreamerCardProps> = ({
               />
             ) : null}
             {/* 기본 아이콘 (프로필 이미지 없거나 로드 실패 시 표시) */}
-            <div className={`w-16 h-16 gradient-primary rounded-full flex items-center justify-center shadow-lg animate-glow ${
-              streamer.profileImageUrl ? 'hidden' : ''
-            }`}>
+            <div 
+              className={`w-16 h-16 rounded-full flex items-center justify-center shadow-lg transition-all duration-300 ${
+                liveStatus?.isLive 
+                  ? 'bg-gradient-to-br from-red-600 to-red-800 border-2 border-red-500 shadow-red-500/50 live-glow-intense cursor-pointer hover:scale-105 hover:shadow-red-500/70 focus:outline-none focus:ring-2 focus:ring-red-500' 
+                  : 'gradient-primary animate-glow'
+              } ${
+                streamer.profileImageUrl ? 'hidden' : ''
+              }`}
+              onClick={liveStatus?.isLive ? handleLiveClick : undefined}
+              onKeyDown={(e) => {
+                if (liveStatus?.isLive && (e.key === 'Enter' || e.key === ' ')) {
+                  e.preventDefault();
+                  handleLiveClick();
+                }
+              }}
+              tabIndex={liveStatus?.isLive ? 0 : -1}
+              role={liveStatus?.isLive ? 'button' : undefined}
+              aria-label={liveStatus?.isLive ? `${streamer.name} 라이브 방송 보러가기` : undefined}
+            >
               <span className="text-2xl">👤</span>
             </div>
-            <div>
-              <h3 className="font-bold text-white text-xl">{streamer.name}</h3>
+            <div className="flex-1">
+              <div className="flex items-center space-x-2">
+                <h3 className="font-bold text-white text-xl">{streamer.name}</h3>
+              </div>
+              
+              {/* 라이브 제목 표시 */}
+              {liveStatus?.isLive && liveStatus.title && (
+                <p className="text-sm text-gray-300 mt-1 truncate" title={liveStatus.title}>
+                  {liveStatus.title}
+                </p>
+              )}
+              
               <div className="flex items-center flex-wrap gap-2 mt-2">
                 {streamer.chzzkId && (
                   <span className="badge badge-danger platform-chzzk whitespace-nowrap" title="치지직">
@@ -81,12 +136,27 @@ const StreamerCard: React.FC<StreamerCardProps> = ({
           </div>
           
           <div className="flex items-center">
-            <span className={`px-4 py-2 rounded-full text-sm font-semibold backdrop-blur-sm ${
-              streamer.isActive 
-                ? 'bg-green-500/20 text-green-300 border border-green-500/30 animate-glow' 
-                : 'bg-gray-500/20 text-gray-300 border border-gray-500/30'
-            }`}>
-              {streamer.isActive ? '✅ 활성' : '⏸️ 비활성'}
+            <span 
+              className={`px-4 py-2 rounded-full text-sm font-semibold backdrop-blur-sm transition-all duration-300 will-change-transform ${
+                liveStatus?.isLive
+                  ? 'bg-red-500/20 text-red-300 border border-red-500/30 live-pulse shadow-lg shadow-red-500/20 hover:scale-105 hover:shadow-red-500/40 cursor-pointer focus:outline-none focus:ring-2 focus:ring-red-500'
+                  : streamer.isActive 
+                    ? 'bg-green-500/20 text-green-300 border border-green-500/30 animate-glow' 
+                    : 'bg-gray-500/20 text-gray-300 border border-gray-500/30'
+              }`}
+              onClick={liveStatus?.isLive ? handleLiveClick : undefined}
+              onKeyDown={(e) => {
+                if (liveStatus?.isLive && (e.key === 'Enter' || e.key === ' ')) {
+                  e.preventDefault();
+                  handleLiveClick();
+                }
+              }}
+              tabIndex={liveStatus?.isLive ? 0 : -1}
+              role={liveStatus?.isLive ? 'button' : undefined}
+              aria-label={liveStatus?.isLive ? `${streamer.name} 라이브 방송 보러가기` : undefined}
+              title={liveStatus?.isLive && liveStatus.url ? '라이브 방송 보러가기' : undefined}
+            >
+              {liveStatus?.isLive ? '🔴 LIVE' : streamer.isActive ? '✅ 활성' : '⏸️ 비활성'}
             </span>
           </div>
         </div>

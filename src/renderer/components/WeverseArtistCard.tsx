@@ -27,8 +27,13 @@ const WeverseArtistCard: React.FC<WeverseArtistCardProps> = ({
   };
 
   return (
-    <div className={`card transition-all duration-300 ${artist.isEnabled ? 'ring-2 ring-purple-500' : ''}`}>
+    <div className={`card transition-all duration-300 ${
+      artist.isEnabled 
+        ? 'ring-2 ring-purple-500' 
+        : ''
+    }`}>
       <div className="card-body">
+        
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-4">
             {/* 프로필 이미지 */}
@@ -50,9 +55,7 @@ const WeverseArtistCard: React.FC<WeverseArtistCardProps> = ({
               ) : null}
               
               {/* 기본 아이콘 (프로필 이미지가 없거나 로드 실패 시) */}
-              <div className={`w-12 h-12 rounded-full flex items-center justify-center text-xl bg-gradient-to-br from-purple-600 to-purple-800 border-2 border-white/20 shadow-md ${
-                artist.profileImageUrl ? 'hidden' : ''
-              }`}>
+              <div className={`w-12 h-12 rounded-full flex items-center justify-center text-xl bg-gradient-to-br from-purple-600 to-purple-800 border-2 border-white/20 shadow-md ${artist.profileImageUrl ? 'hidden' : ''}`}>
                 🎵
               </div>
               
@@ -68,8 +71,12 @@ const WeverseArtistCard: React.FC<WeverseArtistCardProps> = ({
             <div className="flex-1">
               <div className="flex items-center space-x-2">
                 <h3 className="font-semibold text-white">{artist.artistName}</h3>
-                <span className="text-sm text-purple-400">🎵 Weverse</span>
+                <span className="text-sm text-purple-400">
+                  🎵 Weverse
+                </span>
               </div>
+              
+              {/* 상태 표시 */}
               <p className="text-sm text-gray-400 mt-1">
                 {artist.isEnabled ? '알림 활성화됨' : '알림 비활성화됨'}
               </p>

@@ -1,18 +1,20 @@
 import Database from 'better-sqlite3';
 import * as path from 'path';
 import { app } from 'electron';
+import { databaseLogger } from './CategoryLogger';
 import { 
   StreamerData, 
   NotificationSettings, 
   NotificationRecord, 
   AppSettings, 
-  MonitoringStatus 
+  MonitoringStatus,
+  WeverseArtist
 } from '@shared/types';
 
 export class DatabaseManager {
   private db!: Database.Database;
   private dbPath: string;
-  private readonly CURRENT_SCHEMA_VERSION = 3; // 현재 스키마 버전
+  private readonly CURRENT_SCHEMA_VERSION = 4; // 현재 스키마 버전
 
   constructor() {
     // 데이터베이스 경로 설정 (userData 디렉토리)
@@ -22,28 +24,23 @@ export class DatabaseManager {
 
   // 로그 헬퍼 메서드들
   private logInfo(message: string, data?: any): void {
-    const timestamp = new Date().toISOString();
-    console.log(`🔧 [DB_MIGRATION] ${timestamp} - ${message}`, data ? data : '');
+    databaseLogger.info(message, data);
   }
 
   private logError(message: string, error?: any): void {
-    const timestamp = new Date().toISOString();
-    console.error(`❌ [DB_ERROR] ${timestamp} - ${message}`, error ? error : '');
+    databaseLogger.error(message, error);
   }
 
   private logSchema(message: string, data?: any): void {
-    const timestamp = new Date().toISOString();
-    console.log(`📊 [DB_SCHEMA] ${timestamp} - ${message}`, data ? data : '');
+    databaseLogger.info(`[SCHEMA] ${message}`, data);
   }
 
   private logQuery(message: string, query?: string): void {
-    const timestamp = new Date().toISOString();
-    console.log(`🔍 [DB_QUERY] ${timestamp} - ${message}`, query ? `\nQuery: ${query}` : '');
+    databaseLogger.debug(`[QUERY] ${message}`, query ? { query } : undefined);
   }
 
   private logSuccess(message: string, data?: any): void {
-    const timestamp = new Date().toISOString();
-    console.log(`✅ [DB_SUCCESS] ${timestamp} - ${message}`, data ? data : '');
+    databaseLogger.info(`[SUCCESS] ${message}`, data);
   }
 
   // 프로필 이미지 URL 컬럼 생성 헬퍼
@@ -118,6 +115,10 @@ export class DatabaseManager {
       // 기본 데이터 삽입
       this.insertDefaultData();
       this.logSuccess('Default data inserted');
+      
+      // 위버스 알림 마이그레이션 실행
+      await this.migrateWeverseNotifications();
+      this.logSuccess('Weverse notifications migration completed');
       
       this.logSuccess('Database initialization completed successfully');
     } catch (error) {
@@ -380,6 +381,9 @@ export class DatabaseManager {
         case 3:
           this.migrateToVersion3();
           break;
+        case 4:
+          this.migrateToVersion4();
+          break;
         default:
           throw new Error(`Unknown migration version: ${version}`);
       }
@@ -483,6 +487,29 @@ export class DatabaseManager {
         
       } catch (error) {
         console.error('❌ Migration v3 failed:', error);
+        throw error;
+      }
+    });
+    
+    migration();
+  }
+
+  private migrateToVersion4(): void {
+    console.log('📝 Migration v4: Updating CHECK constraint to support weverse type');
+    
+    const migration = this.db.transaction(() => {
+      try {
+        // SQLite는 ALTER TABLE로 CHECK 제약조건을 직접 수정할 수 없으므로 
+        // 테이블을 재생성하는 방식을 사용합니다
+        this.recreateNotificationsTableWithUpdatedConstraints();
+        
+        // 실패한 Weverse 알림들을 재마이그레이션
+        this.retryFailedWeverseNotifications();
+        
+        this.logSuccess('Migration v4: CHECK constraint updated and Weverse notifications migrated');
+        
+      } catch (error) {
+        this.logError('Migration v4 failed', error);
         throw error;
       }
     });
@@ -990,12 +1017,14 @@ export class DatabaseManager {
   async getNotifications(options: { limit?: number; type?: string; offset?: number } = {}): Promise<NotificationRecord[]> {
     try {
       this.logInfo('Starting getNotifications query...');
+      databaseLogger.info('알림 기록 조회 시작', { options });
       
       // 1. 컬럼 존재 확인
       const notificationColumns = this.db.prepare("PRAGMA table_info(notifications)").all()
         .map((col: any) => col.name);
       
       this.logSchema('Available notification columns:', notificationColumns);
+      databaseLogger.debug('알림 테이블 컬럼 확인', { columns: notificationColumns });
       
       // 2. weverse_artists 테이블 컬럼 확인
       let weverseColumns: string[] = [];
@@ -1008,9 +1037,17 @@ export class DatabaseManager {
           weverseColumns = this.db.prepare("PRAGMA table_info(weverse_artists)").all()
             .map((col: any) => col.name);
           this.logSchema('Available weverse_artists columns:', weverseColumns);
+          databaseLogger.debug('위버스 아티스트 테이블 확인', { 
+            exists: true, 
+            columns: weverseColumns 
+          });
+        } else {
+          databaseLogger.warn('위버스 아티스트 테이블이 존재하지 않음');
         }
       } catch (error) {
         this.logError('Failed to check weverse_artists table', error);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        databaseLogger.error('위버스 아티스트 테이블 확인 실패', { error: errorMessage });
       }
       
       // 3. 안전한 쿼리 생성
@@ -1052,8 +1089,37 @@ export class DatabaseManager {
       const params: any[] = [];
 
       if (options.type && options.type !== 'all') {
-        query += ' WHERE n.type = ?';
-        params.push(options.type);
+        if (options.type === 'weverse') {
+          // 위버스 알림은 특별한 조건으로 식별
+          query += ` WHERE (
+            n.weverse_artist_id IS NOT NULL OR 
+            n.type = 'weverse' OR 
+            n.url LIKE '%weverse.io%' OR 
+            n.content LIKE '%[위버스]%' OR 
+            n.title LIKE '%위버스%'
+          )`;
+          
+          databaseLogger.debug('위버스 알림 조회', {
+            query: query.replace(/\s+/g, ' ').trim()
+          });
+        } else if (options.type === 'live') {
+          // 라이브 필터의 경우 위버스 제외
+          query += ` WHERE n.type = ? AND (
+            n.weverse_artist_id IS NULL AND 
+            (n.url IS NULL OR n.url NOT LIKE '%weverse.io%') AND 
+            (n.content IS NULL OR n.content NOT LIKE '%[위버스]%') AND 
+            (n.title IS NULL OR n.title NOT LIKE '%위버스%')
+          )`;
+          params.push(options.type);
+          
+          databaseLogger.debug('라이브 알림 조회 (위버스 제외)', {
+            query: query.replace(/\s+/g, ' ').trim(),
+            params
+          });
+        } else {
+          query += ' WHERE n.type = ?';
+          params.push(options.type);
+        }
       }
 
       query += ' ORDER BY n.created_at DESC';
@@ -1069,10 +1135,23 @@ export class DatabaseManager {
       }
 
       this.logQuery('Executing getNotifications query', query);
+      databaseLogger.debug('쿼리 실행', { 
+        query: query.replace(/\s+/g, ' ').trim(), 
+        params,
+        weverseTableExists,
+        hasWeverseColumns: weverseColumns.length > 0
+      });
+      
       const stmt = this.db.prepare(query);
       const results = stmt.all(...params) as any[];
       
       this.logSuccess(`getNotifications query completed: ${results.length} records`);
+      databaseLogger.info('알림 기록 조회 완료', { 
+        resultCount: results.length,
+        requestedType: options.type,
+        limit: options.limit,
+        offset: options.offset
+      });
       
       // 디버그 로깅
       this.logInfo('getNotifications results sample:', 
@@ -1086,6 +1165,39 @@ export class DatabaseManager {
           type: r.type
         }))
       );
+      
+      // 위버스 관련 결과 분석 강화
+      if (options.type === 'weverse' || !options.type) {
+        const weverseResults = results.filter(r => 
+          r.weverseArtistId != null || 
+          r.type === 'weverse' ||
+          (r.url && r.url.includes('weverse.io')) ||
+          (r.content && r.content.includes('[위버스]')) ||
+          (r.title && r.title.includes('위버스'))
+        );
+        
+        databaseLogger.debug('위버스 관련 결과 분석 강화', {
+          totalResults: results.length,
+          weverseResults: weverseResults.length,
+          weverseTypes: weverseResults.map(r => ({ 
+            id: r.id, 
+            type: r.type, 
+            weverseArtistId: r.weverseArtistId,
+            hasWeverseUrl: !!(r.url && r.url.includes('weverse.io')),
+            hasWeverseContent: !!(r.content && r.content.includes('[위버스]')),
+            hasWeverseTitle: !!(r.title && r.title.includes('위버스'))
+          })),
+          typeBreakdown: {
+            byType: results.reduce((acc, r) => {
+              acc[r.type] = (acc[r.type] || 0) + 1;
+              return acc;
+            }, {} as Record<string, number>),
+            withWeverseArtistId: results.filter(r => r.weverseArtistId != null).length,
+            withWeverseUrl: results.filter(r => r.url && r.url.includes('weverse.io')).length,
+            withWeverseContent: results.filter(r => r.content && r.content.includes('[위버스]')).length
+          }
+        });
+      }
       
       return results.map(row => ({
         id: row.id,
@@ -1104,6 +1216,8 @@ export class DatabaseManager {
       
     } catch (error) {
       this.logError('getNotifications query failed', error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      databaseLogger.error('알림 기록 조회 실패', { error: errorMessage, options });
       return [];
     }
   }
@@ -1298,13 +1412,48 @@ export class DatabaseManager {
       const params: any[] = [];
 
       if (options.type && options.type !== 'all') {
-        query += ' WHERE n.type = ?';
-        params.push(options.type);
+        if (options.type === 'weverse') {
+          // 위버스 알림은 특별한 조건으로 식별
+          query += ` WHERE (
+            n.weverse_artist_id IS NOT NULL OR 
+            n.type = 'weverse' OR 
+            n.url LIKE '%weverse.io%' OR 
+            n.content LIKE '%[위버스]%' OR 
+            n.title LIKE '%위버스%'
+          )`;
+          
+          databaseLogger.debug('위버스 알림 개수 조회', {
+            query: query.replace(/\s+/g, ' ').trim()
+          });
+        } else if (options.type === 'live') {
+          // 라이브 필터의 경우 위버스 제외
+          query += ` WHERE n.type = ? AND (
+            n.weverse_artist_id IS NULL AND 
+            (n.url IS NULL OR n.url NOT LIKE '%weverse.io%') AND 
+            (n.content IS NULL OR n.content NOT LIKE '%[위버스]%') AND 
+            (n.title IS NULL OR n.title NOT LIKE '%위버스%')
+          )`;
+          params.push(options.type);
+          
+          databaseLogger.debug('라이브 알림 개수 조회 (위버스 제외)', {
+            query: query.replace(/\s+/g, ' ').trim(),
+            params
+          });
+        } else {
+          query += ' WHERE n.type = ?';
+          params.push(options.type);
+        }
       }
 
       this.logQuery('Getting total notification count', query);
       const stmt = this.db.prepare(query);
       const result = stmt.get(...params) as { count: number };
+      
+      databaseLogger.info('총 알림 개수 조회 완료', {
+        type: options.type || 'all',
+        count: result.count,
+        query: query.replace(/\s+/g, ' ').trim()
+      });
       
       this.logSuccess(`Total notification count: ${result.count}`);
       return result.count;
@@ -1753,12 +1902,7 @@ export class DatabaseManager {
     }
   }
 
-  async getActiveWeverseArtists(): Promise<{
-    id: number;
-    artistName: string;
-    profileImageUrl?: string;
-    lastNotificationId?: string;
-  }[]> {
+  async getActiveWeverseArtists(): Promise<WeverseArtist[]> {
     try {
       this.logInfo('Starting getActiveWeverseArtists query...');
       
@@ -1781,14 +1925,20 @@ export class DatabaseManager {
         id: 'id',
         artistName: 'artist_name',
         profileImageUrl: weverseColumns.includes('profile_image_url') ? 'profile_image_url' : 'NULL',
-        lastNotificationId: weverseColumns.includes('last_notification_id') ? 'last_notification_id' : 'NULL'
+        isEnabled: weverseColumns.includes('is_enabled') ? 'is_enabled' : '1',
+        lastNotificationId: weverseColumns.includes('last_notification_id') ? 'last_notification_id' : 'NULL',
+        createdAt: weverseColumns.includes('created_at') ? 'created_at' : 'datetime("now")',
+        updatedAt: weverseColumns.includes('updated_at') ? 'updated_at' : 'datetime("now")'
       };
       
       const query = `
         SELECT ${safeColumns.id} as id, 
                ${safeColumns.artistName} as artist_name, 
                ${safeColumns.profileImageUrl} as profile_image_url, 
-               ${safeColumns.lastNotificationId} as last_notification_id
+               ${safeColumns.isEnabled} as is_enabled,
+               ${safeColumns.lastNotificationId} as last_notification_id,
+               ${safeColumns.createdAt} as created_at,
+               ${safeColumns.updatedAt} as updated_at
         FROM weverse_artists 
         WHERE is_enabled = 1 
         ORDER BY artist_name
@@ -1804,7 +1954,15 @@ export class DatabaseManager {
         id: row.id,
         artistName: row.artist_name,
         profileImageUrl: row.profile_image_url,
-        lastNotificationId: row.last_notification_id
+        isEnabled: Boolean(row.is_enabled),
+        lastNotificationId: row.last_notification_id,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        // 라이브 상태 필드들은 기본값으로 설정
+        isLive: false,
+        liveTitle: undefined,
+        liveUrl: undefined,
+        liveStartTime: undefined
       }));
       
     } catch (error) {
@@ -2148,7 +2306,7 @@ export class DatabaseManager {
       // 원본 시간이 제공되면 사용, 아니면 현재 시간 사용
       const timestamp = originalTimestamp ? originalTimestamp.toISOString() : new Date().toISOString();
       
-      // 위버스 알림의 경우 streamer_id를 -1로 설정하고 type을 'live'로 저장 (CHECK 제약 조건 회피)
+      // 위버스 알림의 경우 streamer_id를 -1로 설정하고 올바른 type으로 저장
       const weverseTitle = notification.title.includes('위버스') ? notification.title : `${notification.title}`;
       const weverseContent = `[위버스] ${notification.content}`;
       
@@ -2181,7 +2339,7 @@ export class DatabaseManager {
       const bindingValues = [
         -1,                                      // streamer_id (위버스 전용 특별값)
         artistResult.id,                         // weverse_artist_id (반드시 유효한 아티스트 ID)
-        'live',                                  // type (CHECK 제약 조건 회피를 위해 live 타입으로 저장)
+        'weverse',                               // type (올바른 위버스 타입으로 저장)
         weverseTitle,                            // title 
         weverseContent,                          // content 
         weverseContent || null,                  // content_html
@@ -2646,6 +2804,223 @@ export class DatabaseManager {
     } catch (error) {
       this.logError('Failed to get existing unique keys', error);
       return [];
+    }
+  }
+
+  /**
+   * 기존의 위버스 알림들을 'live' 타입에서 'weverse' 타입으로 마이그레이션
+   */
+  async migrateWeverseNotifications(): Promise<void> {
+    try {
+      this.logInfo('Starting Weverse notifications migration...');
+      
+      // 위버스 알림으로 추정되는 기존 'live' 타입 알림들을 찾기
+      const candidateNotifications = this.db.prepare(`
+        SELECT id, title, content, url, weverse_artist_id 
+        FROM notifications 
+        WHERE type = 'live' 
+        AND streamer_id = -1 
+        AND weverse_artist_id IS NOT NULL
+        AND (
+          title LIKE '%위버스%' OR 
+          content LIKE '%[위버스]%' OR 
+          url LIKE '%weverse.io%'
+        )
+      `).all() as Array<{
+        id: number;
+        title: string;
+        content: string;
+        url: string;
+        weverse_artist_id: number;
+      }>;
+
+      if (candidateNotifications.length === 0) {
+        this.logInfo('No Weverse notifications found to migrate');
+        return;
+      }
+
+      this.logInfo(`Found ${candidateNotifications.length} Weverse notifications to migrate`);
+
+      // 위버스 알림들을 'weverse' 타입으로 업데이트
+      const updateStmt = this.db.prepare(`
+        UPDATE notifications 
+        SET type = 'weverse' 
+        WHERE id = ?
+      `);
+
+      let migratedCount = 0;
+      
+      const transaction = this.db.transaction(() => {
+        for (const notification of candidateNotifications) {
+          const result = updateStmt.run(notification.id);
+          if (result.changes > 0) {
+            migratedCount++;
+          }
+        }
+      });
+
+      transaction();
+
+      this.logSuccess(`Successfully migrated ${migratedCount} Weverse notifications from 'live' to 'weverse' type`);
+      
+    } catch (error) {
+      this.logError('Failed to migrate Weverse notifications', error);
+      throw error;
+    }
+  }
+
+  /**
+   * notifications 테이블을 재생성하여 CHECK 제약조건을 업데이트
+   * SQLite는 ALTER TABLE로 CHECK 제약조건을 수정할 수 없으므로 테이블 재생성 방식 사용
+   */
+  private recreateNotificationsTableWithUpdatedConstraints(): void {
+    this.logInfo('Starting notifications table recreation with updated constraints...');
+    
+    try {
+      // 1. 기존 데이터 백업
+      const backupData = this.db.prepare(`
+        SELECT * FROM notifications ORDER BY id
+      `).all();
+      
+      this.logInfo(`Backing up ${backupData.length} existing notifications`);
+      
+      // 2. 기존 인덱스 목록 저장
+      const existingIndexes = this.db.prepare(`
+        SELECT name, sql FROM sqlite_master 
+        WHERE type = 'index' AND tbl_name = 'notifications' AND sql IS NOT NULL
+      `).all();
+      
+      // 3. 기존 테이블 삭제
+      this.db.exec(`DROP TABLE IF EXISTS notifications`);
+      this.logInfo('Dropped old notifications table');
+      
+      // 4. 새 테이블 생성 (CHECK 제약조건 포함)
+      this.db.exec(`
+        CREATE TABLE notifications (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          streamer_id INTEGER,
+          weverse_artist_id INTEGER,
+          type TEXT NOT NULL CHECK (type IN ('live', 'cafe', 'twitter', 'weverse', 'system')),
+          title TEXT NOT NULL,
+          content TEXT,
+          content_html TEXT,
+          url TEXT,
+          unique_key TEXT UNIQUE,
+          profile_image_url TEXT,
+          is_read BOOLEAN DEFAULT 0,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (streamer_id) REFERENCES streamers(id) ON DELETE CASCADE,
+          FOREIGN KEY (weverse_artist_id) REFERENCES weverse_artists(id) ON DELETE CASCADE
+        )
+      `);
+      this.logSuccess('Created new notifications table with updated CHECK constraint');
+      
+      // 5. 데이터 복원
+      if (backupData.length > 0) {
+        const insertStmt = this.db.prepare(`
+          INSERT INTO notifications (
+            id, streamer_id, weverse_artist_id, type, title, content, content_html, 
+            url, unique_key, profile_image_url, is_read, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        
+        let restoredCount = 0;
+        for (const row of backupData) {
+          try {
+            const rowData = row as any;
+            insertStmt.run(
+              rowData.id, rowData.streamer_id, rowData.weverse_artist_id, rowData.type, rowData.title,
+              rowData.content, rowData.content_html, rowData.url, rowData.unique_key,
+              rowData.profile_image_url, rowData.is_read, rowData.created_at
+            );
+            restoredCount++;
+          } catch (rowError) {
+            this.logError(`Failed to restore notification ${(row as any).id}:`, rowError);
+          }
+        }
+        
+        this.logSuccess(`Restored ${restoredCount}/${backupData.length} notifications`);
+      }
+      
+      // 6. 인덱스 재생성
+      for (const index of existingIndexes) {
+        try {
+          const indexData = index as any;
+          this.db.exec(indexData.sql);
+          this.logInfo(`Recreated index: ${indexData.name}`);
+        } catch (indexError) {
+          this.logError(`Failed to recreate index ${(index as any).name}:`, indexError);
+        }
+      }
+      
+      this.logSuccess('Notifications table recreation completed');
+      
+    } catch (error) {
+      this.logError('Failed to recreate notifications table:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 실패한 Weverse 알림들을 재시도하여 저장
+   */
+  private retryFailedWeverseNotifications(): void {
+    this.logInfo('Retrying failed Weverse notifications...');
+    
+    try {
+      // CHECK 제약조건이 수정되었으므로 기존 migrateWeverseNotifications 로직을 재실행
+      // 하지만 이미 'live' 타입의 Weverse 알림들이 있을 수 있으므로 다시 시도
+      const candidateNotifications = this.db.prepare(`
+        SELECT id, title, content, url, weverse_artist_id 
+        FROM notifications 
+        WHERE type = 'live' 
+        AND streamer_id = -1 
+        AND weverse_artist_id IS NOT NULL
+        AND (
+          title LIKE '%위버스%' OR 
+          content LIKE '%[위버스]%' OR 
+          url LIKE '%weverse.io%'
+        )
+      `).all() as Array<{
+        id: number;
+        title: string;
+        content: string;
+        url: string;
+        weverse_artist_id: number;
+      }>;
+
+      if (candidateNotifications.length === 0) {
+        this.logInfo('No failed Weverse notifications found to retry');
+        return;
+      }
+
+      this.logInfo(`Found ${candidateNotifications.length} Weverse notifications to migrate from 'live' to 'weverse' type`);
+
+      // 위버스 알림들을 'weverse' 타입으로 업데이트
+      const updateStmt = this.db.prepare(`
+        UPDATE notifications 
+        SET type = 'weverse' 
+        WHERE id = ?
+      `);
+
+      let migratedCount = 0;
+      
+      for (const notification of candidateNotifications) {
+        try {
+          const result = updateStmt.run(notification.id);
+          if (result.changes > 0) {
+            migratedCount++;
+          }
+        } catch (updateError) {
+          this.logError(`Failed to update notification ${notification.id}:`, updateError);
+        }
+      }
+
+      this.logSuccess(`Successfully migrated ${migratedCount}/${candidateNotifications.length} Weverse notifications to 'weverse' type`);
+      
+    } catch (error) {
+      this.logError('Failed to retry Weverse notifications:', error);
+      throw error;
     }
   }
 }

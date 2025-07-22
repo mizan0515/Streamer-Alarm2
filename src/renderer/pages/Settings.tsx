@@ -15,9 +15,11 @@ interface SettingsData {
 interface SettingsProps {
   onNaverActionStart?: () => void;
   onNaverActionEnd?: () => void;
+  onWeverseActionStart?: (action: 'login' | 'logout') => void;
+  onWeverseActionEnd?: () => void;
 }
 
-const Settings: React.FC<SettingsProps> = ({ onNaverActionStart, onNaverActionEnd }) => {
+const Settings: React.FC<SettingsProps> = ({ onNaverActionStart, onNaverActionEnd, onWeverseActionStart, onWeverseActionEnd }) => {
   console.log('⚙️ Settings page rendering...');
   const [settings, setSettings] = useState<SettingsData>({
     checkInterval: 30,
@@ -159,6 +161,7 @@ const Settings: React.FC<SettingsProps> = ({ onNaverActionStart, onNaverActionEn
   };
 
   const handleWeverseLogin = async () => {
+    onWeverseActionStart?.('login');
     try {
       const result = await window.electronAPI.weverseLogin();
       if (result) {
@@ -171,6 +174,8 @@ const Settings: React.FC<SettingsProps> = ({ onNaverActionStart, onNaverActionEn
     } catch (error) {
       console.error('Failed to login to Weverse:', error);
       alert('위버스 로그인 중 오류가 발생했습니다.');
+    } finally {
+      onWeverseActionEnd?.();
     }
   };
 
@@ -179,6 +184,7 @@ const Settings: React.FC<SettingsProps> = ({ onNaverActionStart, onNaverActionEn
       return;
     }
 
+    onWeverseActionStart?.('logout');
     try {
       const result = await window.electronAPI.weverseLogout();
       if (result) {
@@ -191,6 +197,8 @@ const Settings: React.FC<SettingsProps> = ({ onNaverActionStart, onNaverActionEn
     } catch (error) {
       console.error('Failed to logout from Weverse:', error);
       alert('위버스 로그아웃 중 오류가 발생했습니다.');
+    } finally {
+      onWeverseActionEnd?.();
     }
   };
 
@@ -367,9 +375,16 @@ const Settings: React.FC<SettingsProps> = ({ onNaverActionStart, onNaverActionEn
               <div className="border-t border-gray-700 pt-4">
                 <h3 className="text-sm font-medium text-gray-300 mb-2">위버스 로그인 상태</h3>
                 <div className="flex items-center justify-between">
-                  <span className={`text-sm ${settings.needWeverseLogin ? 'text-red-400' : 'text-green-400'}`}>
-                    {settings.needWeverseLogin ? '로그인 필요' : '로그인됨'}
-                  </span>
+                  <div>
+                    <span className={`text-sm ${settings.needWeverseLogin ? 'text-red-400' : 'text-green-400'}`}>
+                      {settings.needWeverseLogin ? '⚠️ 로그인 필요' : '✅ 로그인됨'}
+                    </span>
+                    {!settings.needWeverseLogin && (
+                      <div className="text-xs text-gray-500 mt-1">
+                        세션 영속성 지원 - 자동 로그인 유지
+                      </div>
+                    )}
+                  </div>
                   {settings.needWeverseLogin ? (
                     <button
                       onClick={handleWeverseLogin}
@@ -389,7 +404,8 @@ const Settings: React.FC<SettingsProps> = ({ onNaverActionStart, onNaverActionEn
                   )}
                 </div>
                 <p className="text-xs text-gray-400 mt-1">
-                  위버스 아티스트 알림 모니터링을 위해 위버스 로그인이 필요합니다
+                  위버스 아티스트 알림 모니터링을 위해 위버스 로그인이 필요합니다.
+                  로그인 후 세션이 자동으로 저장되어 앱 재시작 시에도 유지됩니다.
                 </p>
               </div>
 

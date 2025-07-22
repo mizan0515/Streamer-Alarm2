@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
-import { StreamerData } from '@shared/types';
+import { StreamerData, LiveStatus } from '@shared/types';
 import StreamerCard from '../components/StreamerCard';
 import AddStreamerForm from '../components/AddStreamerForm';
 
 interface StreamerManagementProps {
   streamers: StreamerData[];
+  liveStatuses: LiveStatus[];
   liveStreamersCount: number;
   onAdd: (streamerData: Omit<StreamerData, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>;
   onUpdate: (streamerData: StreamerData) => Promise<void>;
@@ -13,6 +14,7 @@ interface StreamerManagementProps {
 
 const StreamerManagement: React.FC<StreamerManagementProps> = ({
   streamers,
+  liveStatuses,
   liveStreamersCount,
   onAdd,
   onUpdate,
@@ -63,8 +65,23 @@ const StreamerManagement: React.FC<StreamerManagementProps> = ({
     }
   };
 
-  const activeStreamers = streamers.filter(s => s.isActive);
-  const inactiveStreamers = streamers.filter(s => !s.isActive);
+  // 라이브 상태별 정렬 함수
+  const sortStreamersWithLiveStatus = (streamers: StreamerData[]) => {
+    return streamers.sort((a, b) => {
+      const aLiveStatus = liveStatuses.find(ls => ls.streamerId === a.id);
+      const bLiveStatus = liveStatuses.find(ls => ls.streamerId === b.id);
+      
+      // 라이브 중인 스트리머를 먼저 배치
+      if (aLiveStatus?.isLive && !bLiveStatus?.isLive) return -1;
+      if (!aLiveStatus?.isLive && bLiveStatus?.isLive) return 1;
+      
+      // 같은 라이브 상태면 이름순으로 정렬
+      return a.name.localeCompare(b.name);
+    });
+  };
+
+  const activeStreamers = sortStreamersWithLiveStatus(streamers.filter(s => s.isActive));
+  const inactiveStreamers = sortStreamersWithLiveStatus(streamers.filter(s => !s.isActive));
 
   return (
     <div className="h-full overflow-auto">
@@ -168,15 +185,19 @@ const StreamerManagement: React.FC<StreamerManagementProps> = ({
                       </span>
                     </div>
                     <div className="grid grid-cols-1 gap-6">
-                      {activeStreamers.map((streamer) => (
-                        <StreamerCard
-                          key={streamer.id}
-                          streamer={streamer}
-                          onUpdate={handleUpdate}
-                          onDelete={() => handleDelete(streamer.id)}
-                          disabled={isLoading}
-                        />
-                      ))}
+                      {activeStreamers.map((streamer) => {
+                        const liveStatus = liveStatuses.find(ls => ls.streamerId === streamer.id);
+                        return (
+                          <StreamerCard
+                            key={streamer.id}
+                            streamer={streamer}
+                            liveStatus={liveStatus}
+                            onUpdate={handleUpdate}
+                            onDelete={() => handleDelete(streamer.id)}
+                            disabled={isLoading}
+                          />
+                        );
+                      })}
                     </div>
                   </div>
                 )}
@@ -194,15 +215,19 @@ const StreamerManagement: React.FC<StreamerManagementProps> = ({
                       </span>
                     </div>
                     <div className="grid grid-cols-1 gap-6">
-                      {inactiveStreamers.map((streamer) => (
-                        <StreamerCard
-                          key={streamer.id}
-                          streamer={streamer}
-                          onUpdate={handleUpdate}
-                          onDelete={() => handleDelete(streamer.id)}
-                          disabled={isLoading}
-                        />
-                      ))}
+                      {inactiveStreamers.map((streamer) => {
+                        const liveStatus = liveStatuses.find(ls => ls.streamerId === streamer.id);
+                        return (
+                          <StreamerCard
+                            key={streamer.id}
+                            streamer={streamer}
+                            liveStatus={liveStatus}
+                            onUpdate={handleUpdate}
+                            onDelete={() => handleDelete(streamer.id)}
+                            disabled={isLoading}
+                          />
+                        );
+                      })}
                     </div>
                   </div>
                 )}

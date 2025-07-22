@@ -483,6 +483,19 @@
     animation: neonPulse 2s infinite;
   }
 
+  /* 라이브 상태 애니메이션 */
+  .live-pulse {
+    animation: livePulse 2s ease-in-out infinite;
+  }
+
+  .live-border-rotate {
+    animation: liveBorderRotate 3s linear infinite;
+  }
+
+  .live-glow-intense {
+    animation: liveGlowIntense 1.5s ease-in-out infinite alternate;
+  }
+
   /* 심플한 페이지네이션 */
   .pagination-simple {
     @apply flex items-center justify-center space-x-6 py-4;
@@ -616,6 +629,44 @@
     to {
       opacity: 0;
       transform: translateY(20px) scale(0.5) rotate(-90deg);
+    }
+  }
+
+  /* 라이브 상태 애니메이션 키프레임 */
+  @keyframes livePulse {
+    0%, 100% { 
+      box-shadow: 0 0 15px rgba(239, 68, 68, 0.4), 0 4px 20px rgba(239, 68, 68, 0.3);
+      transform: scale(1);
+    }
+    50% { 
+      box-shadow: 0 0 25px rgba(239, 68, 68, 0.7), 0 4px 30px rgba(239, 68, 68, 0.5);
+      transform: scale(1.02);
+    }
+  }
+
+  @keyframes liveBorderRotate {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+
+  @keyframes liveGlowIntense {
+    0% { 
+      box-shadow: 0 0 10px rgba(239, 68, 68, 0.3), 0 0 20px rgba(239, 68, 68, 0.2), 0 0 30px rgba(239, 68, 68, 0.1);
+    }
+    100% { 
+      box-shadow: 0 0 20px rgba(239, 68, 68, 0.6), 0 0 30px rgba(239, 68, 68, 0.4), 0 0 40px rgba(239, 68, 68, 0.2);
+    }
+  }
+
+  /* 성능 최적화를 위한 미디어 쿼리 */
+  @media (prefers-reduced-motion: reduce) {
+    .live-pulse,
+    .live-border-rotate,
+    .live-glow-intense,
+    .animate-pulse,
+    .animate-glow,
+    .neon-pulse {
+      animation: none;
     }
   }
 }

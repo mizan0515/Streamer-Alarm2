@@ -42,10 +42,15 @@ const NotificationHistory: React.FC<NotificationHistoryProps> = ({
 
   // 위버스 알림 구분 헬퍼 함수
   const isWeverseNotification = (notification: NotificationRecord): boolean => {
-    return !!(notification.type === 'weverse' || 
-              notification.url?.includes('weverse.io') || 
-              notification.title?.includes('위버스') || 
-              notification.content?.includes('[위버스]'));
+    return !!(
+      notification.type === 'weverse' || 
+      notification.url?.includes('weverse.io') || 
+      notification.title?.includes('위버스') || 
+      notification.content?.includes('[위버스]') ||
+      // 추가적인 위버스 식별 조건들
+      (notification.streamerId === -1 && notification.weverseArtistId != null) ||
+      notification.url?.toLowerCase().includes('weverse')
+    );
   };
 
   // 필터별 개수 로드

@@ -78,8 +78,14 @@ const WeverseManagement: React.FC<WeverseManagementProps> = ({
     }
   };
 
-  const enabledArtists = artists.filter(artist => artist.isEnabled);
-  const disabledArtists = artists.filter(artist => !artist.isEnabled);
+  // 아티스트들을 활성화 상태로 정렬
+  const enabledArtists = artists
+    .filter(artist => artist.isEnabled)
+    .sort((a, b) => a.artistName.localeCompare(b.artistName));
+    
+  const disabledArtists = artists
+    .filter(artist => !artist.isEnabled)
+    .sort((a, b) => a.artistName.localeCompare(b.artistName));
 
   return (
     <div className="h-full overflow-auto">
@@ -150,7 +156,7 @@ const WeverseManagement: React.FC<WeverseManagementProps> = ({
               </div>
 
               {/* 통계 카드 */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 <div className="card">
                   <div className="card-body">
                     <div className="flex items-center justify-between">
@@ -188,20 +194,12 @@ const WeverseManagement: React.FC<WeverseManagementProps> = ({
                     </div>
                   </div>
                 </div>
+
               </div>
             </div>
           </div>
 
-          {/* 위버스 로그인 오버레이 */}
-          {isWeverseLoginLoading && (
-            <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center">
-              <div className="glass-card p-8 text-center animate-glow">
-                <div className="spinner spinner-lg mb-6"></div>
-                <h2 className="text-xl font-bold text-white neon-text mb-2">위버스 로그인 중</h2>
-                <p className="text-gray-400">브라우저에서 위버스 로그인을 완료해주세요...</p>
-              </div>
-            </div>
-          )}
+          {/* 위버스 로그인 오버레이는 App.tsx에서 전역으로 관리 */}
 
           {/* 아티스트 목록 */}
           <div className="space-y-6">
