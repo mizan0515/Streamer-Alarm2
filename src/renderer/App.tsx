@@ -5,7 +5,7 @@ import StreamerManagement from './pages/StreamerManagement';
 import NotificationHistory from './pages/NotificationHistory';
 import Settings from './pages/Settings';
 import WeverseManagement from './pages/WeverseManagement';
-import { StreamerData, NotificationRecord, MonitoringStats, WeverseArtist } from '@shared/types';
+import { StreamerData, NotificationRecord, MonitoringStats, WeverseArtist, LiveStatus } from '@shared/types';
 
 const App: React.FC = () => {
   console.log('🚀 App component rendering...');
@@ -13,6 +13,7 @@ const App: React.FC = () => {
   const [streamers, setStreamers] = useState<StreamerData[]>([]);
   const [notifications, setNotifications] = useState<NotificationRecord[]>([]);
   const [weverseArtists, setWeverseArtists] = useState<WeverseArtist[]>([]);
+  const [liveStatuses, setLiveStatuses] = useState<LiveStatus[]>([]);
   const [needWeverseLogin, setNeedWeverseLogin] = useState(true);
   const [stats, setStats] = useState<MonitoringStats>({
     totalStreamers: 0,
@@ -26,6 +27,12 @@ const App: React.FC = () => {
   const [isNaverActionLoading, setIsNaverActionLoading] = useState(false);
   const [isWeverseLoginLoading, setIsWeverseLoginLoading] = useState(false);
   const [isWeverseRefreshLoading, setIsWeverseRefreshLoading] = useState(false);
+  const [weverseAction, setWeverseAction] = useState<'login' | 'logout' | null>(null);
+
+  // 오버레이 상태 디버깅
+  useEffect(() => {
+    console.log('🔍 Overlay state changed - isWeverseLoginLoading:', isWeverseLoginLoading, 'isNaverActionLoading:', isNaverActionLoading);
+  }, [isWeverseLoginLoading, isNaverActionLoading]);
 
   useEffect(() => {
     initializeApp();
@@ -121,6 +128,47 @@ const App: React.FC = () => {
         setWeverseArtists(updatedArtists);
       });
 
+      // 위버스 아티스트 라이브 상태 업데이트 이벤트 리스너 (제거됨)
+
+      // 스트리머 라이브 상태 업데이트 이벤트 리스너
+      window.electronAPI.on('live-status-updated', (liveStatuses: LiveStatus[]) => {
+        console.log('🔴 Received live status update:', liveStatuses.length);
+        setLiveStatuses(liveStatuses);
+        
+        // 실시간으로 라이브 스트리머 수 업데이트
+        const liveCount = liveStatuses.filter(status => status.isLive).length;
+        setStats(prevStats => ({
+          ...prevStats,
+          liveStreamers: liveCount
+        }));
+      });
+
+      // 위버스 로그인 상태 변경 이벤트 리스너
+      window.electronAPI.on('weverse-login-status-changed', (data: { needLogin: boolean }) => {
+        console.log('🔐 Received Weverse login status change:', data);
+        setNeedWeverseLogin(data.needLogin);
+        
+        // 로그인 완료 시 오버레이 해제
+        if (!data.needLogin) {
+          console.log('🔐 Login completed - hiding overlay');
+          setIsWeverseLoginLoading(false);
+          setWeverseAction(null);
+          
+          // 아티스트 목록도 새로고침
+          window.electronAPI.getWeverseArtists().then(artists => {
+            setWeverseArtists(artists);
+          }).catch(error => {
+            console.error('Failed to refresh artists after login:', error);
+          });
+        } else {
+          // 로그아웃 시 아티스트 목록 초기화
+          console.log('🚪 Logout completed - hiding overlay');
+          setIsWeverseLoginLoading(false);
+          setWeverseAction(null);
+          setWeverseArtists([]);
+        }
+      });
+
       // 스트리머 데이터 업데이트 이벤트 리스너
       window.electronAPI.on('streamer-data-updated', (updatedStreamers: StreamerData[]) => {
         console.log('👥 Received streamer update:', updatedStreamers.length);
@@ -145,6 +193,8 @@ const App: React.FC = () => {
       window.electronAPI.removeAllListeners('monitoring-status-changed');
       window.electronAPI.removeAllListeners('settings-updated');
       window.electronAPI.removeAllListeners('weverse-artists-updated');
+      window.electronAPI.removeAllListeners('weverse-login-status-changed');
+      window.electronAPI.removeAllListeners('live-status-updated');
     }
   };
 
@@ -188,7 +238,8 @@ const App: React.FC = () => {
     try {
       if (window.electronAPI?.getLiveStatus) {
         const liveStatus = await window.electronAPI.getLiveStatus();
-        liveStreamers = liveStatus.filter((status: any) => status.isLive).length;
+        setLiveStatuses(liveStatus);
+        liveStreamers = liveStatus.filter((status: LiveStatus) => status.isLive).length;
       }
     } catch (error) {
       console.error('Failed to get live status:', error);
@@ -293,7 +344,10 @@ const App: React.FC = () => {
   const handleWeverseLogin = async () => {
     try {
       console.log('🔐 Initiating Weverse login...');
+      console.log('🔐 Setting isWeverseLoginLoading to true...');
       setIsWeverseLoginLoading(true);
+      setWeverseAction('login');
+      console.log('🔐 isWeverseLoginLoading set to true, action: login');
       
       if (window.electronAPI?.weverseLogin) {
         await window.electronAPI.weverseLogin();
@@ -303,22 +357,26 @@ const App: React.FC = () => {
         const settings = await window.electronAPI.getSettings();
         setNeedWeverseLogin(settings.needWeverseLogin);
         
-        // 아티스트 목록 새로고침
-        const artists = await window.electronAPI.getWeverseArtists();
-        setWeverseArtists(artists);
+        // 아티스트 목록 새로고침은 이벤트 리스너에서 처리
+        console.log('✅ Weverse login API call completed');
       }
     } catch (error) {
       console.error('❌ Failed to login to Weverse:', error);
       alert('위버스 로그인에 실패했습니다: ' + (error instanceof Error ? error.message : String(error)));
-    } finally {
+      // 오류 시에만 오버레이 해제
+      console.log('🔐 Login failed - hiding overlay');
       setIsWeverseLoginLoading(false);
+      setWeverseAction(null);
     }
   };
   
   const handleWeverseLogout = async () => {
     try {
       console.log('🚪 Initiating Weverse logout...');
+      console.log('🚪 Setting isWeverseLoginLoading to true...');
       setIsWeverseLoginLoading(true);
+      setWeverseAction('logout');
+      console.log('🚪 isWeverseLoginLoading set to true, action: logout');
       
       if (window.electronAPI?.weverseLogout) {
         await window.electronAPI.weverseLogout();
@@ -328,14 +386,16 @@ const App: React.FC = () => {
         const settings = await window.electronAPI.getSettings();
         setNeedWeverseLogin(settings.needWeverseLogin);
         
-        // 아티스트 목록 초기화
-        setWeverseArtists([]);
+        // 아티스트 목록 초기화는 이벤트 리스너에서 처리
+        console.log('✅ Weverse logout API call completed');
       }
     } catch (error) {
       console.error('❌ Failed to logout from Weverse:', error);
       alert('위버스 로그아웃에 실패했습니다: ' + (error instanceof Error ? error.message : String(error)));
-    } finally {
+      // 오류 시에만 오버레이 해제
+      console.log('🚪 Logout failed - hiding overlay');
       setIsWeverseLoginLoading(false);
+      setWeverseAction(null);
     }
   };
   
@@ -414,8 +474,10 @@ const App: React.FC = () => {
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center">
           <div className="glass-card p-8 text-center animate-glow">
             <div className="spinner spinner-lg mb-6"></div>
-            <h2 className="text-xl font-bold text-white neon-text mb-2">위버스 계정 처리 중</h2>
-            <p className="text-gray-400">브라우저에서 위버스 로그인을 완료해주세요...</p>
+            <h2 className="text-xl font-bold text-white neon-text mb-2">
+              {weverseAction === 'login' ? '위버스 로그인 중' : '위버스 로그아웃 중'}
+            </h2>
+            <p className="text-gray-400">잠시만 기다려주세요...</p>
           </div>
         </div>
       )}
@@ -433,6 +495,7 @@ const App: React.FC = () => {
       
       <Sidebar 
         stats={stats} 
+        needWeverseLogin={needWeverseLogin}
         onNaverActionStart={() => setIsNaverActionLoading(true)}
         onNaverActionEnd={() => setIsNaverActionLoading(false)}
       />
@@ -444,6 +507,7 @@ const App: React.FC = () => {
               <div className="h-full">
                 <StreamerManagement 
                   streamers={streamers}
+                  liveStatuses={liveStatuses}
                   liveStreamersCount={stats.liveStreamers}
                   onAdd={handleAddStreamer}
                   onUpdate={handleUpdateStreamer}
@@ -490,6 +554,14 @@ const App: React.FC = () => {
                 <Settings 
                   onNaverActionStart={() => setIsNaverActionLoading(true)}
                   onNaverActionEnd={() => setIsNaverActionLoading(false)}
+                  onWeverseActionStart={(action) => {
+                    setIsWeverseLoginLoading(true);
+                    setWeverseAction(action);
+                  }}
+                  onWeverseActionEnd={() => {
+                    setIsWeverseLoginLoading(false);
+                    setWeverseAction(null);
+                  }}
                 />
               </div>
             } 

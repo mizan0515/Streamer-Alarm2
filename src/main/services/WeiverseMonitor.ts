@@ -3,10 +3,14 @@ import { execSync } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
+import * as os from 'os';
 import { app } from 'electron';
 import { DatabaseManager } from './DatabaseManager';
 import { NotificationService } from './NotificationService';
 import { SettingsService } from './SettingsService';
+import { SessionManager } from './SessionManager';
+import { weverseLogger, sessionLogger } from './CategoryLogger';
+import { WeverseArtist } from '@shared/types';
 
 export interface WeiverseNotification {
   id: string;
@@ -33,73 +37,83 @@ export class WeiverseMonitor {
   private databaseManager: DatabaseManager;
   private notificationService: NotificationService;
   private settingsService: SettingsService;
+  private sessionManager: SessionManager;
   private browserDataPath: string;
   private isLoggedIn: boolean = false;
   private loginCheckInProgress: boolean = false;
   private lastKnownLoginStatus: boolean = false;
   private lastNotificationIds: Map<string, string> = new Map();
+  
+  // 토큰 갱신 관리
+  private tokenExpiryTime: number = 0; // 토큰 만료 시간 (밀리초)
+  private lastTokenRefreshCheck: number = 0;
+  private tokenRefreshInterval: number = 30 * 60 * 1000; // 30분 간격으로 만료 시간 체크
+  private preemptiveRefreshHours: number = 6; // 6시간 전 선제적 갱신
+  
+  // 디버깅 및 메트릭 수집
+  private sessionMetrics = {
+    loginAttempts: 0,
+    loginSuccesses: 0,
+    sessionFailures: 0,
+    tokenRefreshAttempts: 0,
+    tokenRefreshSuccesses: 0,
+    cookieRecoveryAttempts: 0,
+    cookieRecoverySuccesses: 0,
+    lastLoginTime: 0,
+    totalUptime: 0,
+    sessionStateChanges: [] as Array<{
+      timestamp: number;
+      from: string;
+      to: string;
+      reason: string;
+      success: boolean;
+    }>
+  };
+
+  // 쿠키 관리 상수 정의
+  private static readonly CRITICAL_COOKIES = {
+    // 최고 우선순위 - 인증 토큰
+    HIGH_PRIORITY: [
+      'we2_access_token',
+      'we2_refresh_token',
+      'access_token',
+      'refresh_token'
+    ],
+    // 중간 우선순위 - 세션 관리
+    MEDIUM_PRIORITY: [
+      'weverse_session',
+      'session_id',
+      'auth_token',
+      'JSESSIONID'
+    ],
+    // 낮은 우선순위 - 사용자 설정
+    LOW_PRIORITY: [
+      'user_id',
+      'user_settings',
+      'locale',
+      'timezone'
+    ]
+  };
+
+  private static readonly WEVERSE_DOMAINS = [
+    'weverse.io',
+    '.weverse.io',
+    'account.weverse.io',
+    '.account.weverse.io',
+    'api.weverse.io',
+    '.api.weverse.io',
+    'global.weverse.io',
+    '.global.weverse.io',
+    'static.weverse.io',
+    '.static.weverse.io'
+  ];
 
   /**
    * 위버스 시간 형식(예: "2025. 07. 01 21:19")을 JavaScript Date 객체로 변환
    * @param timeText 위버스에서 파싱한 시간 문자열
    * @returns JavaScript Date 객체 (UTC 기준)
    */
-  private parseWeverseTime(timeText: string): Date {
-    try {
-      // 빈 문자열이나 null/undefined 처리
-      if (!timeText || timeText.trim() === '') {
-        console.warn(`⚠️ 위버스 시간 정보가 비어있음 - 현재 시간 사용`);
-        return new Date();
-      }
-      
-      // 정규식으로 시간 정보 추출: "2025. 07. 01 21:19"
-      const timeMatch = timeText.match(/(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})\s+(\d{1,2}):(\d{1,2})/);
-      
-      if (timeMatch) {
-        const [, year, month, day, hour, minute] = timeMatch;
-        
-        // 입력값 검증
-        const yearNum = parseInt(year, 10);
-        const monthNum = parseInt(month, 10);
-        const dayNum = parseInt(day, 10);
-        const hourNum = parseInt(hour, 10);
-        const minuteNum = parseInt(minute, 10);
-        
-        // 유효성 검사
-        if (yearNum < 2020 || yearNum > 2030 || 
-            monthNum < 1 || monthNum > 12 ||
-            dayNum < 1 || dayNum > 31 ||
-            hourNum < 0 || hourNum > 23 ||
-            minuteNum < 0 || minuteNum > 59) {
-          console.warn(`⚠️ 위버스 시간 범위 오류: "${timeText}" - 현재 시간 사용`);
-          return new Date();
-        }
-        
-        // 한국 시간(KST, UTC+9)으로 Date 객체 생성
-        const kstDate = new Date(
-          yearNum,
-          monthNum - 1, // JavaScript에서 월은 0부터 시작
-          dayNum,
-          hourNum,
-          minuteNum,
-          0 // 초
-        );
-        
-        // 한국 시간을 UTC로 변환 (9시간 차이)
-        const utcDate = new Date(kstDate.getTime() - (9 * 60 * 60 * 1000));
-        
-        console.log(`⏰ 위버스 시간 파싱 성공: "${timeText}" -> ${utcDate.toISOString()}`);
-        return utcDate;
-      }
-      
-      console.warn(`⚠️ 위버스 시간 파싱 실패: "${timeText}" - 현재 시간 사용`);
-      return new Date();
-      
-    } catch (error) {
-      console.error(`❌ 위버스 시간 파싱 오류: "${timeText}"`, error);
-      return new Date();
-    }
-  }
+  // parseWeverseTime 함수는 1270줄에 있는 중복 구현을 사용합니다
 
   /**
    * 위버스 URL에서 고유한 ID를 추출하는 함수
@@ -169,6 +183,7 @@ export class WeiverseMonitor {
     this.databaseManager = databaseManager;
     this.notificationService = notificationService;
     this.settingsService = settingsService;
+    this.sessionManager = new SessionManager('weverse');
     
     const userDataPath = app.getPath('userData');
     this.browserDataPath = path.join(userDataPath, 'weverse_browser_data');
@@ -261,14 +276,24 @@ export class WeiverseMonitor {
           '--no-zygote',
           '--disable-gpu',
           '--disable-blink-features=AutomationControlled',
-          '--disable-features=VizDisplayCompositor'
+          '--disable-features=VizDisplayCompositor',
+          '--disable-web-security',
+          '--disable-features=TranslateUI',
+          '--disable-extensions-except',
+          '--disable-plugins-discovery',
+          '--disable-default-apps',
+          '--disable-component-extensions-with-background-pages'
         ],
         userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
         viewport: { width: 1280, height: 720 },
         locale: 'ko-KR',
         extraHTTPHeaders: {
           'Accept-Language': 'ko-KR,ko;q=0.9,en;q=0.8'
-        }
+        },
+        // 세션 지속성 강화를 위한 추가 설정
+        acceptDownloads: false,
+        permissions: ['notifications'],
+        colorScheme: 'no-preference'
       });
 
       this.isPersistentContext = true;
@@ -319,8 +344,12 @@ export class WeiverseMonitor {
   }
 
   async checkLoginStatus(): Promise<boolean> {
+    const startTime = Date.now();
+    this.logSessionStateChange('checking', 'check-initiated', 'Login status check started', false);
+    
     if (this.loginCheckInProgress) {
       console.log('🔄 Weverse login check already in progress, returning cached status');
+      this.logSessionStateChange('checking', 'check-cached', `Returned cached status: ${this.lastKnownLoginStatus}`, false);
       return this.lastKnownLoginStatus;
     }
 
@@ -333,7 +362,7 @@ export class WeiverseMonitor {
         await this.setupBrowser();
       }
 
-      console.log('🔍 Checking Weverse login status...');
+      weverseLogger.info('위버스 로그인 상태 확인 시작');
       
       // 세션 무결성 먼저 검사
       const sessionIntegrity = await this.validateSessionIntegrity();
@@ -342,8 +371,13 @@ export class WeiverseMonitor {
         this.isLoggedIn = false;
         this.lastKnownLoginStatus = false;
         this.settingsService.updateSetting('needWeverseLogin', true).catch(() => {});
-      this.notifyWeverseLoginStatusChange(true);
         this.notifyWeverseLoginStatusChange(true);
+        
+        // 세션 무결성 실패 로깅
+        const checkDuration = Date.now() - startTime;
+        this.logSessionStateChange('checking', 'check-failed', `Session integrity failed after ${checkDuration}ms`, true);
+        console.log(`❌ 위버스 로그인 상태 체크 실패 - 세션 무결성 (소요시간: ${checkDuration}ms)`);
+        
         return false;
       }
       
@@ -510,9 +544,47 @@ export class WeiverseMonitor {
         };
       });
       
+      // 상세한 로그인 상태 체크 결과 로깅
+      weverseLogger.info('로그인 상태 체크 완료', {
+        isLoggedIn: loginCheckResult.isLoggedIn,
+        loginMethod: loginCheckResult.loginMethod,
+        hasAuthCookies: loginCheckResult.hasAuthCookies,
+        cookieCount: loginCheckResult.cookieCount,
+        url: loginCheckResult.url,
+        pageTitle: loginCheckResult.pageTitle
+      });
+
+      weverseLogger.debug('UI 요소 감지 결과', {
+        loginButton: loginCheckResult.loginButton,
+        signupButton: loginCheckResult.signupButton,
+        userProfile: loginCheckResult.userProfile,
+        notificationButton: loginCheckResult.notificationButton,
+        userMenu: loginCheckResult.userMenu,
+        avatarImage: loginCheckResult.avatarImage,
+        hasLoginElements: loginCheckResult.hasLoginElements,
+        hasUserElements: loginCheckResult.hasUserElements,
+        hasSignInText: loginCheckResult.hasSignInText
+      });
+
+      weverseLogger.debug('페이지 상태 분석', {
+        isLoginPage: loginCheckResult.isLoginPage,
+        isLoginPageTitle: loginCheckResult.isLoginPageTitle,
+        isOnMainSite: loginCheckResult.isOnMainSite,
+        bodyContentPreview: loginCheckResult.bodyContent
+      });
+      
       console.log('🔍 위버스 로그인 상태 체크 결과:', loginCheckResult);
       
       const isLoggedIn = loginCheckResult.isLoggedIn;
+      
+      // Winston 로깅 추가
+      weverseLogger.info('로그인 상태 확인 완료', {
+        isLoggedIn,
+        loginMethod: loginCheckResult.loginMethod,
+        hasAuthCookies: loginCheckResult.hasAuthCookies,
+        cookieCount: loginCheckResult.cookieCount,
+        checkDuration: Date.now() - startTime
+      });
       
       this.isLoggedIn = isLoggedIn;
       this.lastKnownLoginStatus = isLoggedIn;
@@ -524,11 +596,22 @@ export class WeiverseMonitor {
       // UI에 위버스 로그인 상태 변경 즉시 알림
       this.notifyWeverseLoginStatusChange(!isLoggedIn);
       
-      console.log(isLoggedIn ? '✅ Weverse login status: LOGGED IN' : '❌ Weverse login status: NOT LOGGED IN');
+      weverseLogger.info(`위버스 로그인 상태: ${isLoggedIn ? '로그인됨' : '로그아웃됨'}`);
+      
+      // 로그인 상태 체크 성공 로깅
+      const checkDuration = Date.now() - startTime;
+      const statusText = isLoggedIn ? 'logged-in' : 'logged-out';
+      this.logSessionStateChange('checking', statusText, `Login status check completed in ${checkDuration}ms (${loginCheckResult.loginMethod})`, true);
+      console.log(`✅ 위버스 로그인 상태 체크 완료: ${statusText} (소요시간: ${checkDuration}ms, 방식: ${loginCheckResult.loginMethod})`);
       
       return isLoggedIn;
       
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      weverseLogger.error('로그인 상태 확인 실패', { 
+        error: errorMessage,
+        checkDuration: Date.now() - startTime 
+      });
       console.error('Failed to check Weverse login status:', error);
       
       this.isLoggedIn = false;
@@ -536,6 +619,11 @@ export class WeiverseMonitor {
       
       this.settingsService.updateSetting('needWeverseLogin', true).catch(() => {});
       this.notifyWeverseLoginStatusChange(true);
+      
+      // 로그인 상태 체크 오류 로깅
+      const checkDuration = Date.now() - startTime;
+      this.logSessionStateChange('checking', 'check-error', `Login status check error after ${checkDuration}ms: ${errorMessage}`, true);
+      console.log(`❌ 위버스 로그인 상태 체크 오류 (소요시간: ${checkDuration}ms):`, errorMessage);
       
       return false;
       
@@ -630,82 +718,43 @@ export class WeiverseMonitor {
   }
 
   async initiateLogin(): Promise<boolean> {
+    const startTime = Date.now();
+    const previousLoginStatus = this.isLoggedIn ? 'logged-in' : 'logged-out';
+    
     try {
-      const loginBrowser = await chromium.launch({
+      // 로그인 시도 메트릭 시작
+      this.logSessionStateChange(previousLoginStatus, 'login-attempt', 'User initiated login', true);
+      console.log('🔄 위버스 로그인 시도 시작...');
+      
+      // 동일한 프로필 디렉토리 사용을 위해 기존 컨텍스트 종료
+      if (this.context) {
+        console.log('🔄 로그인을 위해 기존 브라우저 컨텍스트 종료...');
+        await this.context.close();
+        this.context = null;
+      }
+      
+      // 사용자 프로필 경로 설정 (영구 프로필 사용 - 모니터링과 동일한 컨텍스트)
+      const userDataDir = this.browserDataPath;
+      
+      const loginBrowser = await chromium.launchPersistentContext(userDataDir, {
         headless: false,
         args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-accelerated-2d-canvas',
           '--no-first-run',
-          '--no-zygote',
-          '--disable-blink-features=AutomationControlled',
-          '--disable-features=VizDisplayCompositor'
+          '--disable-blink-features=AutomationControlled'
         ]
       });
 
-      const loginContext = await loginBrowser.newContext({
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-        viewport: { width: 1280, height: 720 },
-        locale: 'ko-KR',
-        extraHTTPHeaders: {
-          'Accept-Language': 'ko-KR,ko;q=0.9,en;q=0.8'
-        }
-      });
-
-      const loginPage = await loginContext.newPage();
+      // PersistentContext 사용 시 별도 context 생성 불필요
+      const loginPage = await loginBrowser.newPage();
       
-      // 로그인 페이지에도 자동화 감지 우회 스크립트 주입
+      // 최소한의 자동화 감지 우회만 적용
       await loginPage.addInitScript(() => {
-        // webdriver property 제거
+        // webdriver property만 제거 (가장 기본적인 우회)
         Object.defineProperty(navigator, 'webdriver', {
           get: () => undefined,
         });
         
-        // plugins 배열에 가짜 플러그인 추가
-        Object.defineProperty(navigator, 'plugins', {
-          get: () => [1, 2, 3, 4, 5],
-        });
-        
-        // languages 속성 설정
-        Object.defineProperty(navigator, 'languages', {
-          get: () => ['ko-KR', 'ko', 'en-US', 'en'],
-        });
-        
-        // chrome property 추가
-        (window as any).chrome = {
-          runtime: {},
-          csi: () => {},
-          loadTimes: () => ({}),
-          app: {
-            isInstalled: false,
-            InstallState: {
-              DISABLED: 'disabled',
-              INSTALLED: 'installed',
-              NOT_INSTALLED: 'not_installed'
-            },
-            RunningState: {
-              CANNOT_RUN: 'cannot_run',
-              READY_TO_RUN: 'ready_to_run',
-              RUNNING: 'running'
-            }
-          }
-        };
-        
-        // permissions property 추가
-        const originalQuery = window.navigator.permissions.query;
-        window.navigator.permissions.query = (parameters: any) => (
-          parameters.name === 'notifications' ?
-            Promise.resolve({ state: Notification.permission } as PermissionStatus) :
-            originalQuery(parameters)
-        );
-        
-        // 기타 감지 우회
-        Object.defineProperty(navigator, 'webdriver', {
-          get: () => undefined,
-        });
-        
+        // 자동화 관련 property 제거
         delete (navigator as any).__proto__.webdriver;
       });
       
@@ -716,116 +765,74 @@ export class WeiverseMonitor {
       console.log('Waiting for user to login to Weverse...');
       
       try {
-        await loginPage.waitForURL('https://weverse.io/', { timeout: 300000 });
+        await loginPage.waitForURL('https://weverse.io/', { timeout: 120000 }); // 2분으로 단축
         
         console.log('Weverse login completed successfully');
         
-        const allCookies = await loginContext.cookies();
+        const allCookies = await loginBrowser.cookies();
         console.log(`전체 쿠키 개수: ${allCookies.length}`);
         
-        // 위버스 관련 도메인 쿠키만 필터링 (더 포괄적인 도메인 목록)
-        const weverseRelatedDomains = [
-          'weverse.io',
-          '.weverse.io', 
-          'account.weverse.io',
-          '.account.weverse.io',
-          'api.weverse.io',
-          '.api.weverse.io',
-          'global.weverse.io',
-          '.global.weverse.io',
-          'static.weverse.io',
-          '.static.weverse.io'
+        // 새로운 쿠키 분석 시스템을 사용하여 쿠키 분석
+        const analysis = this.analyzeCookiesByPriority(allCookies);
+        console.log(`📊 로그인 쿠키 분석 결과: ${analysis.summary}`);
+        
+        // 우선순위별 쿠키 로깅
+        if (analysis.highPriority.length > 0) {
+          console.log('🔑 고우선순위 쿠키:');
+          analysis.highPriority.forEach(cookie => {
+            console.log(`  - ${cookie.name} (도메인: ${cookie.domain})`);
+          });
+        }
+        
+        // 모든 위버스 쿠키 수집 (우선순위별로 정렬됨)
+        const weversesCookies = [
+          ...analysis.highPriority,
+          ...analysis.mediumPriority,
+          ...analysis.lowPriority
         ];
         
-        const weversesCookies = allCookies.filter(cookie => 
-          weverseRelatedDomains.some(domain => 
-            cookie.domain === domain || 
-            cookie.domain.endsWith(domain) ||
-            domain.includes(cookie.domain) ||
-            cookie.domain.includes('weverse')
-          )
-        );
-        
-        console.log(`위버스 관련 쿠키 개수: ${weversesCookies.length}`);
-        console.log('위버스 쿠키 상세:', weversesCookies.map(c => ({
-          name: c.name,
-          domain: c.domain,
-          path: c.path,
-          httpOnly: c.httpOnly,
-          secure: c.secure,
-          sameSite: c.sameSite,
-          expires: c.expires
-        })));
-        
-        // 중요한 인증 관련 쿠키 존재 확인
-        const criticalCookies = ['access_token', 'refresh_token', 'session_id', 'auth_token', 'weverse_session'];
-        const foundCriticalCookies = weversesCookies.filter(cookie => 
-          criticalCookies.some(critical => cookie.name.toLowerCase().includes(critical.toLowerCase()))
-        );
-        
-        console.log(`중요 인증 쿠키 발견: ${foundCriticalCookies.length}개`);
-        foundCriticalCookies.forEach(cookie => {
-          console.log(`중요 쿠키: ${cookie.name} (도메인: ${cookie.domain})`);
+        // 쿠키 만료 시간 연장 처리 (스코프 외부에서 정의)
+        const enhancedCookies = weversesCookies.map(cookie => {
+          const enhanced = { ...cookie };
+          
+          // expires가 -1이거나 짧은 경우 30일로 연장 (더 긴 유지 기간)
+          if (!cookie.expires || cookie.expires === -1 || cookie.expires < Date.now() / 1000 + 86400) {
+            enhanced.expires = Math.floor(Date.now() / 1000) + (30 * 24 * 60 * 60); // 30일
+            weverseLogger.info('쿠키 만료 시간 연장', { 
+              cookieName: cookie.name, 
+              domain: cookie.domain, 
+              newExpiry: new Date(enhanced.expires * 1000).toISOString() 
+            });
+            console.log(`🔧 쿠키 만료 시간 연장: ${cookie.name} (30일)`);
+          }
+          
+          return enhanced;
         });
         
         if (this.context) {
           try {
-            // 기존 쿠키 완전 삭제
-            await this.context.clearCookies();
-            console.log('기존 쿠키 삭제 완료');
+            // 기존 쿠키 정리
+            await this.cleanupExpiredCookies();
+            console.log('기존 쿠키 정리 완료');
             
-            // 새 쿠키 추가 (개별 처리로 오류 확인)
+            // 새로운 백업/복원 시스템으로 쿠키 처리
             if (weversesCookies.length > 0) {
-              console.log('🍪 쿠키 개별 설정 시작...');
-              let successCount = 0;
+              console.log('🔄 향상된 쿠키 백업/복원 시스템 사용...');
               
-              for (const cookie of weversesCookies) {
-                try {
-                  // 쿠키 유효성 검사 및 영구화
-                  const cookieToAdd = { ...cookie };
-                  
-                  // expires가 -1이면 영구 쿠키로 변환 (30일 유효)
-                  if (cookieToAdd.expires === -1) {
-                    const thirtyDaysFromNow = Math.floor(Date.now() / 1000) + (30 * 24 * 60 * 60);
-                    cookieToAdd.expires = thirtyDaysFromNow;
-                    console.log(`🔄 세션 쿠키 ${cookieToAdd.name}을 영구 쿠키로 변환 (30일)`);
-                  }
-                  
-                  // 도메인은 원본 그대로 유지 (.weverse.io는 유효한 도메인 형태)
-                  
-                  console.log(`설정 중: ${cookieToAdd.name} (도메인: ${cookieToAdd.domain})`);
-                  await this.context.addCookies([cookieToAdd]);
-                  successCount++;
-                  console.log(`✅ 성공: ${cookieToAdd.name}`);
-                } catch (cookieError) {
-                  console.error(`❌ 쿠키 설정 실패 ${cookie.name}:`, cookieError instanceof Error ? cookieError.message : String(cookieError));
-                }
-              }
+              // 새로운 복원 메서드 사용
+              const restored = await this.restoreCriticalCookies(enhancedCookies);
               
-              console.log(`🍪 쿠키 설정 완료: ${successCount}/${weversesCookies.length}개 성공`);
-              
-              // 쿠키 동기화를 위해 3초 대기
-              console.log('⏱️ 쿠키 동기화를 위해 3초 대기 중...');
-              await new Promise(resolve => setTimeout(resolve, 3000));
-              
-              // 설정 후 확인
-              console.log('🔍 쿠키 설정 후 확인...');
-              const savedCookies = await this.context.cookies();
-              const savedWeversesCookies = savedCookies.filter(cookie => 
-                weverseRelatedDomains.some(domain => 
-                  cookie.domain === domain || 
-                  cookie.domain.endsWith(domain) ||
-                  domain.includes(cookie.domain)
-                )
-              );
-              
-              console.log(`📊 저장된 위버스 쿠키: ${savedWeversesCookies.length}개`);
-              savedWeversesCookies.forEach(cookie => {
-                console.log(`  ✓ ${cookie.name}: ${cookie.domain} (${cookie.path})`);
-              });
-              
-              if (savedWeversesCookies.length < successCount) {
-                console.warn(`⚠️ 쿠키 저장 불일치: 설정 ${successCount}개 vs 저장 ${savedWeversesCookies.length}개`);
+              if (restored) {
+                console.log('✅ 쿠키 복원 성공');
+                
+                // 쿠키 동기화를 위해 짧은 대기
+                console.log('⏱️ 쿠키 동기화 대기 중...');
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                
+                // 복원 후 확인
+                await this.logFinalCookieState();
+              } else {
+                console.warn('⚠️ 쿠키 복원 실패 - 수동 처리 필요');
               }
             } else {
               console.warn('⚠️ 복사할 위버스 쿠키가 없습니다');
@@ -834,120 +841,230 @@ export class WeiverseMonitor {
             console.error('위버스 쿠키 복사 실패:', error);
             
             // 쿠키 복사 실패 시 개별 쿠키 처리 시도
-            console.log('개별 쿠키 복사 시도...');
-            let successCount = 0;
-            for (const cookie of weversesCookies) {
-              try {
-                await this.context.addCookies([cookie]);
-                successCount++;
-              } catch (cookieError) {
-                console.warn(`쿠키 ${cookie.name} 복사 실패:`, cookieError);
-              }
-            }
-            console.log(`개별 쿠키 복사 결과: ${successCount}/${weversesCookies.length}개 성공`);
+            await this.fallbackCookieCopy(weversesCookies);
           }
         }
+        
+        // 중요: 로그인 브라우저 종료 전에 모니터링 컨텍스트를 먼저 설정
+        console.log('🔄 모니터링 브라우저 컨텍스트 재시작 (쿠키 동기화 전)...');
+        try {
+          // 기존 컨텍스트가 있다면 종료
+          if (this.context) {
+            try {
+              await (this.context as any).close();
+              this.context = null;
+            } catch (error) {
+              console.warn('⚠️ 기존 컨텍스트 종료 중 오류:', error);
+              this.context = null;
+            }
+          }
+          
+          // 새로운 모니터링 컨텍스트 생성
+          await this.setupBrowser();
+          console.log('✅ 모니터링 브라우저 컨텍스트 재시작 완료');
+          
+          // 이제 쿠키를 모니터링 컨텍스트로 다시 복사
+          if (weversesCookies.length > 0 && this.context) {
+            console.log('🔄 모니터링 컨텍스트로 쿠키 복사 중...');
+            const restored = await this.restoreCriticalCookies(enhancedCookies);
+            if (restored) {
+              weverseLogger.info('모니터링 컨텍스트 쿠키 복사 성공', { 
+                cookieCount: enhancedCookies.length 
+              });
+              console.log('✅ 모니터링 컨텍스트 쿠키 복사 성공');
+            } else {
+              weverseLogger.warn('모니터링 컨텍스트 쿠키 복사 실패');
+              console.warn('⚠️ 모니터링 컨텍스트 쿠키 복사 실패');
+            }
+          }
+          
+        } catch (setupError) {
+          const errorMsg = setupError instanceof Error ? setupError.message : String(setupError);
+          weverseLogger.error('모니터링 컨텍스트 재시작 실패', { error: errorMsg });
+          console.warn('⚠️ 모니터링 브라우저 컨텍스트 재시작 실패:', setupError);
+        }
+        
+        // 로그인 성공 시 세션 파일에 저장 (로그인 브라우저의 쿠키 직접 저장)
+        if (weversesCookies.length > 0) {
+          await this.sessionManager.saveCookiesToFile('weverse', weversesCookies);
+          weverseLogger.info('로그인 브라우저에서 세션 저장 완료', { cookieCount: weversesCookies.length });
+          console.log(`💾 세션 저장 완료: ${weversesCookies.length}개 쿠키`);
+        }
+        
+        // 추가로 모니터링 컨텍스트에서도 저장 시도
+        await this.saveCurrentSession();
+        
+        // 로그인 성공 시 설정 즉시 업데이트
+        await this.settingsService.updateSetting('needWeverseLogin', false);
+        this.notifyWeverseLoginStatusChange(false);
+        
+        // 쿠키 동기화 완료 후 브라우저 종료 (1초 대기)
+        console.log('🔄 쿠키 동기화 완료, 1초 후 로그인 브라우저 종료...');
+        await new Promise(resolve => setTimeout(resolve, 1000));
         
         await loginBrowser.close();
+        console.log('✅ 위버스 로그인 브라우저 종료 완료');
         
-        // 쿠키 설정 후 브라우저 컨텍스트 새로고침
-        console.log('쿠키 동기화 및 세션 확립을 위해 처리 중...');
+        // 브라우저 종료 후 백그라운드에서 세션 확인 (브라우저 종료와 독립적)
+        console.log('🔄 백그라운드에서 세션 확인 중...');
+        this.verifySessionInBackground();
         
-        // persistent context의 새 페이지에서 쿠키 확인
-        if (this.context) {
-          const testPage = await this.context.newPage();
-          try {
-            console.log('📄 새 페이지에서 위버스 접속하여 쿠키 동기화 확인...');
-            await testPage.goto('https://weverse.io/', { 
-              waitUntil: 'domcontentloaded',
-              timeout: 15000 
-            });
-            
-            // 페이지 완전 로딩 대기
-            await testPage.waitForTimeout(3000);
-            
-            // 쿠키 확인
-            const cookiesInNewPage = await testPage.evaluate(() => document.cookie);
-            console.log(`🍪 새 페이지에서 확인된 쿠키 수: ${cookiesInNewPage.split(';').filter(c => c.trim()).length}개`);
-            
-            await testPage.close();
-          } catch (testError) {
-            console.warn('⚠️ 쿠키 동기화 테스트 페이지 오류:', testError);
-            await testPage.close();
-          }
-        }
+        // 로그인 성공 메트릭 기록
+        this.sessionMetrics.loginSuccesses++;
+        const loginDuration = Date.now() - startTime;
+        this.logSessionStateChange(previousLoginStatus, 'logged-in', `Login successful in ${loginDuration}ms`, true);
         
-        // 대기 시간 증가 및 단계별 확인
-        console.log('세션 안정화를 위해 8초 대기합니다...');
-        await this.delay(8000);
+        weverseLogger.info('로그인 성공', {
+          duration: loginDuration,
+          totalCookies: allCookies.length,
+          weversesCookies: weversesCookies.length,
+          highPriorityCookies: analysis.highPriority?.length || 0,
+          loginAttempts: this.sessionMetrics.loginAttempts,
+          loginSuccesses: this.sessionMetrics.loginSuccesses
+        });
         
-        console.log('위버스 로그인 상태를 확인합니다...');
+        console.log(`✅ 위버스 로그인 성공 (소요시간: ${loginDuration}ms)`);
         
-        // 단일 로그인 상태 확인 (재시도 제거)
-        console.log('🔍 위버스 로그인 상태 최종 확인...');
-        const loginSuccess = await this.checkLoginStatus();
-        
-        if (loginSuccess) {
-          console.log('✅ 위버스 로그인 최종 성공!');
-          await this.settingsService.updateSetting('needWeverseLogin', false);
-          this.notifyWeverseLoginStatusChange(false);
-        } else {
-          console.log('❌ 위버스 로그인 최종 실패 - 모든 시도 완료');
-          
-          // 실패 원인 분석을 위한 추가 디버깅
-          console.log('🔍 실패 원인 분석을 위한 추가 정보 수집...');
-          try {
-            const debugPage = await this.context!.newPage();
-            await debugPage.goto('https://weverse.io/', { waitUntil: 'domcontentloaded', timeout: 15000 });
-            
-            // 더 긴 대기 시간으로 페이지 완전 로딩 확보
-            await debugPage.waitForTimeout(5000);
-            
-            const debugInfo = await debugPage.evaluate(() => ({
-              cookies: document.cookie,
-              cookieCount: document.cookie.split(';').filter(c => c.trim()).length,
-              hasAccessToken: document.cookie.includes('we2_access_token'),
-              hasRefreshToken: document.cookie.includes('we2_refresh_token'),
-              userAgent: navigator.userAgent,
-              pageContent: document.body?.innerText?.substring(0, 500) || 'No content',
-              hasLoginButton: !!document.querySelector('[data-testid="login-button"]'),
-              hasNotificationButton: !!document.querySelector('.HeaderNotificationWrapperView_notification__hCLgg'),
-              hasSignInText: (document.body?.innerText || '').includes('Sign in'),
-              pageTitle: document.title,
-              url: window.location.href
-            }));
-            
-            console.log('🐛 상세 디버그 정보:', debugInfo);
-            
-            // 쿠키 상태 재확인
-            const contextCookies = await this.context!.cookies('https://weverse.io');
-            console.log(`🍪 컨텍스트 쿠키 상태: ${contextCookies.length}개`);
-            contextCookies.forEach(cookie => {
-              console.log(`  - ${cookie.name}: ${cookie.domain} (만료: ${cookie.expires ? new Date(cookie.expires * 1000).toISOString() : '세션'})`);
-            });
-            
-            await debugPage.close();
-          } catch (debugError) {
-            console.log('디버그 정보 수집 실패:', debugError);
-          }
-        }
-        
-        return loginSuccess;
+        return true; // 로그인 성공 반환
       } catch (error) {
         console.log('Weverse login timeout or failed');
         await loginBrowser.close();
+        
+        // 로그인 실패 시에도 모니터링 컨텍스트 복구
+        console.log('🔄 로그인 실패 - 모니터링 브라우저 컨텍스트 복구...');
+        try {
+          await this.setupBrowser();
+          console.log('✅ 모니터링 브라우저 컨텍스트 복구 완료');
+        } catch (setupError) {
+          console.warn('⚠️ 모니터링 브라우저 컨텍스트 복구 실패:', setupError);
+        }
+        
+        // 로그인 실패 메트릭 기록 (타임아웃/실패)
+        this.sessionMetrics.sessionFailures++;
+        const loginDuration = Date.now() - startTime;
+        this.logSessionStateChange(previousLoginStatus, 'login-failed', `Login timeout/failed after ${loginDuration}ms`, true);
+        
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        weverseLogger.warn('로그인 타임아웃/실패', {
+          duration: loginDuration,
+          error: errorMessage,
+          loginAttempts: this.sessionMetrics.loginAttempts,
+          sessionFailures: this.sessionMetrics.sessionFailures
+        });
+        
+        console.log(`❌ 위버스 로그인 실패 - 타임아웃 (소요시간: ${loginDuration}ms)`);
+        
         return false;
       }
     } catch (error) {
       console.error('Failed to initiate Weverse login:', error);
+      
+      // 예외 발생 시에도 모니터링 컨텍스트 복구 시도
+      console.log('🔄 로그인 예외 발생 - 모니터링 브라우저 컨텍스트 복구...');
+      try {
+        await this.setupBrowser();
+        console.log('✅ 모니터링 브라우저 컨텍스트 복구 완료');
+      } catch (setupError) {
+        console.warn('⚠️ 모니터링 브라우저 컨텍스트 복구 실패:', setupError);
+      }
+      
+      // 로그인 실패 메트릭 기록 (예외 발생)
+      this.sessionMetrics.sessionFailures++;
+      const loginDuration = Date.now() - startTime;
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logSessionStateChange(previousLoginStatus, 'login-error', `Login exception after ${loginDuration}ms: ${errorMessage}`, true);
+      console.log(`❌ 위버스 로그인 실패 - 예외 발생 (소요시간: ${loginDuration}ms):`, errorMessage);
+      
       return false;
     }
   }
 
+  // 백그라운드에서 세션 확인 (브라우저 종료와 독립적)
+  private async verifySessionInBackground(): Promise<void> {
+    try {
+      // 5초 대기 후 세션 확인
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      
+      console.log('🔍 백그라운드 세션 확인 시작...');
+      
+      if (this.context) {
+        const testPage = await this.context.newPage();
+        try {
+          await testPage.goto('https://weverse.io/', { 
+            waitUntil: 'domcontentloaded',
+            timeout: 10000 
+          });
+          
+          const cookies = await testPage.evaluate(() => document.cookie);
+          const cookieCount = cookies.split(';').filter(c => c.trim()).length;
+          console.log(`🍪 백그라운드 세션 확인: ${cookieCount}개 쿠키 감지`);
+          
+          await testPage.close();
+        } catch (error) {
+          console.warn('⚠️ 백그라운드 세션 확인 오류:', error);
+          await testPage.close();
+        }
+      }
+      
+      console.log('✅ 백그라운드 세션 확인 완료');
+    } catch (error) {
+      console.error('❌ 백그라운드 세션 확인 실패:', error);
+    }
+  }
+
+  private async logFinalCookieState(): Promise<void> {
+    if (this.context) {
+      try {
+        const finalAnalysis = this.analyzeCookiesByPriority(await this.context.cookies());
+        console.log(`📊 최종 쿠키 상태: ${finalAnalysis.summary}`);
+      } catch (error) {
+        console.warn('⚠️ 최종 쿠키 상태 확인 실패:', error);
+      }
+    }
+  }
+
+  private async fallbackCookieCopy(weversesCookies: any[]): Promise<void> {
+    weverseLogger.info('개별 쿠키 복사 시도 시작', { totalCookies: weversesCookies.length });
+    console.log('개별 쿠키 복사 시도...');
+    let successCount = 0;
+    const failedCookies: string[] = [];
+    
+    if (this.context) {
+      for (const cookie of weversesCookies) {
+        try {
+          await this.context.addCookies([cookie]);
+          successCount++;
+          weverseLogger.debug('쿠키 복사 성공', { cookieName: cookie.name, domain: cookie.domain });
+        } catch (cookieError) {
+          const errorMessage = cookieError instanceof Error ? cookieError.message : String(cookieError);
+          failedCookies.push(cookie.name);
+          weverseLogger.warn('쿠키 복사 실패', { 
+            cookieName: cookie.name, 
+            domain: cookie.domain, 
+            error: errorMessage 
+          });
+          console.warn(`쿠키 ${cookie.name} 복사 실패:`, cookieError);
+        }
+      }
+    } else {
+      weverseLogger.error('쿠키 복사 실패 - 브라우저 컨텍스트 없음');
+    }
+    
+    const result = `${successCount}/${weversesCookies.length}개 성공`;
+    weverseLogger.info('개별 쿠키 복사 완료', { 
+      successCount, 
+      totalCount: weversesCookies.length, 
+      failedCookies: failedCookies.length > 0 ? failedCookies : undefined 
+    });
+    console.log(`개별 쿠키 복사 결과: ${result}`);
+  }
+
   async initiateLogout(): Promise<boolean> {
     try {
+      weverseLogger.info('로그아웃 시도 시작');
       const currentLoginStatus = await this.checkLoginStatus();
       if (!currentLoginStatus) {
+        weverseLogger.info('이미 로그아웃 상태');
         console.log('💡 Already logged out from Weverse, no action needed');
         this.isLoggedIn = false;
         await this.settingsService.updateSetting('needWeverseLogin', true);
@@ -970,21 +1087,26 @@ export class WeiverseMonitor {
       
       if (this.context) {
         await this.context.clearCookies();
+        weverseLogger.info('브라우저 쿠키 정리 완료');
         console.log('Weverse 브라우저 쿠키 정리 완료');
       }
       
       const loginStatus = await this.checkLoginStatus();
       
       if (!loginStatus) {
+        weverseLogger.info('로그아웃 성공');
         console.log('Weverse 로그아웃 완료');
         await this.settingsService.updateSetting('needWeverseLogin', true);
         this.notifyWeverseLoginStatusChange(true);
         return true;
       } else {
+        weverseLogger.warn('로그아웃 실패 - 여전히 로그인 상태');
         console.log('Weverse 로그아웃 실패 - 여전히 로그인 상태');
         return false;
       }
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      weverseLogger.error('로그아웃 중 오류 발생', { error: errorMessage });
       console.error('Weverse 로그아웃 중 오류 발생:', error);
       
       try {
@@ -1190,8 +1312,18 @@ export class WeiverseMonitor {
   }
 
   async checkNotifications(silentMode: boolean = false): Promise<WeiverseNotification[]> {
+    const startTime = Date.now();
+    
+    weverseLogger.info('알림 확인 시작', {
+      silentMode,
+      isLoggedIn: this.isLoggedIn,
+      lastKnownLoginStatus: this.lastKnownLoginStatus,
+      browserSetup: !!this.browser && !!this.page
+    });
+    
     // 로그인 상태 확인 및 복구 시도
     if (!await this.ensureLoggedIn()) {
+      weverseLogger.warn('로그인 상태 확인 실패, 복구 시도 중');
       if (!silentMode) {
         console.log('Weverse not logged in, attempting recovery...');
       }
@@ -1199,6 +1331,9 @@ export class WeiverseMonitor {
       // 로그인 실패 복구 시도
       const recoveryResult = await this.recoverFromLoginFailure();
       if (!recoveryResult) {
+        weverseLogger.error('로그인 복구 실패', {
+          duration: `${Date.now() - startTime}ms`
+        });
         if (!silentMode) {
           console.log('❌ 위버스 로그인 복구 실패 - 수동 로그인 필요');
         }
@@ -1211,6 +1346,10 @@ export class WeiverseMonitor {
       const artistsNeedingBaseline = await this.databaseManager.getWeverseArtistsNeedingBaseline();
       
       if (artistsNeedingBaseline.length > 0) {
+        weverseLogger.info('기준선 설정 필요한 아티스트 발견', {
+          count: artistsNeedingBaseline.length,
+          artists: artistsNeedingBaseline.map(a => ({ id: a.id, name: a.artistName }))
+        });
         console.log(`🎯 [위버스 기준선] ${artistsNeedingBaseline.length}명의 아티스트에 대해 기준선 설정이 필요합니다`);
         
         // Silent mode로 baseline 설정 (알림 발송 안함)
@@ -1219,13 +1358,23 @@ export class WeiverseMonitor {
       
       const activeArtists = await this.databaseManager.getActiveWeverseArtists();
       
+      weverseLogger.debug('활성화된 아티스트 조회 완료', {
+        activeArtistsCount: activeArtists.length,
+        artistNames: activeArtists.map(a => a.artistName)
+      });
+      
       if (activeArtists.length === 0) {
+        weverseLogger.warn('활성화된 위버스 아티스트 없음');
         if (!silentMode) {
           console.log('활성화된 위버스 아티스트가 없습니다');
         }
         return [];
       }
 
+      weverseLogger.info('아티스트 알림 확인 시작', {
+        activeArtistsCount: activeArtists.length,
+        silentMode
+      });
       if (!silentMode) {
         console.log(`🔍 ${activeArtists.length}개 위버스 아티스트 알림 확인 중...`);
       }
@@ -1236,25 +1385,96 @@ export class WeiverseMonitor {
 
       // 1단계: 위버스 홈페이지 접근
       console.log('🌐 위버스 홈페이지 접근 중...');
-      await this.page!.goto('https://weverse.io/', { 
-        waitUntil: 'domcontentloaded',
-        timeout: 15000 
-      });
+      try {
+        await this.page!.goto('https://weverse.io/', { 
+          waitUntil: 'domcontentloaded',
+          timeout: 20000 
+        });
+      } catch (error) {
+        console.error('❌ 위버스 페이지 접근 실패:', error);
+        // 브라우저 재설정 후 재시도
+        await this.setupBrowser();
+        await this.page!.goto('https://weverse.io/', { 
+          waitUntil: 'domcontentloaded',
+          timeout: 20000 
+        });
+      }
 
       // 2단계: 페이지 로딩 완료 대기
       console.log('⏳ 페이지 로딩 완료 대기 중...');
       await this.page!.waitForTimeout(3000);
 
-      // 3단계: 알림 버튼 찾기 및 클릭
+      // 3단계: 알림 버튼 찾기 및 클릭 (모달 오버레이 처리 포함)
       console.log('🔍 알림 버튼 찾는 중...');
       const notificationButton = await this.page!.$('.HeaderNotificationWrapperView_notification__hCLgg button');
       if (!notificationButton) {
+        weverseLogger.warn('알림 버튼을 찾을 수 없음');
         console.warn('❌ 알림 버튼을 찾을 수 없습니다');
         return [];
       }
 
+      // ReactModal 오버레이 감지 및 처리
+      console.log('🔍 ReactModal 오버레이 확인 중...');
+      const modalOverlay = await this.page!.$('.ReactModal__Overlay');
+      if (modalOverlay) {
+        weverseLogger.info('ReactModal 오버레이 감지됨, 닫기 시도');
+        console.log('⚠️ ReactModal 오버레이 감지됨, 닫기 시도 중...');
+        
+        try {
+          // 오버레이 클릭으로 모달 닫기 시도
+          await modalOverlay.click();
+          await this.page!.waitForTimeout(1000);
+          
+          // ESC 키로 모달 닫기 시도 (백업 방법)
+          await this.page!.keyboard.press('Escape');
+          await this.page!.waitForTimeout(1000);
+          
+          // 모달이 완전히 사라질 때까지 대기
+          try {
+            await this.page!.waitForSelector('.ReactModal__Overlay', { 
+              state: 'hidden', 
+              timeout: 3000 
+            });
+            weverseLogger.info('ReactModal 오버레이 성공적으로 닫힘');
+            console.log('✅ ReactModal 오버레이 성공적으로 닫힘');
+          } catch (modalError) {
+            weverseLogger.warn('ReactModal 오버레이 닫기 실패, 계속 진행');
+            console.warn('⚠️ ReactModal 오버레이 닫기 실패, 계속 진행...');
+          }
+        } catch (closeError) {
+          const errorMsg = closeError instanceof Error ? closeError.message : String(closeError);
+          weverseLogger.error('ReactModal 오버레이 처리 중 오류', { error: errorMsg });
+          console.error('❌ ReactModal 오버레이 처리 중 오류:', closeError);
+        }
+      }
+
       console.log('🔔 알림 버튼 클릭 중...');
-      await notificationButton.click();
+      try {
+        // 안전한 클릭을 위해 force 옵션 사용
+        await notificationButton.click({ force: true });
+        weverseLogger.info('알림 버튼 클릭 성공');
+      } catch (clickError) {
+        const errorMsg = clickError instanceof Error ? clickError.message : String(clickError);
+        weverseLogger.error('알림 버튼 클릭 실패', { error: errorMsg });
+        
+        // 대안적인 클릭 방법 시도
+        console.log('🔄 대안적인 클릭 방법 시도 중...');
+        try {
+          await this.page!.evaluate(() => {
+            const btn = document.querySelector('.HeaderNotificationWrapperView_notification__hCLgg button') as HTMLElement;
+            if (btn) btn.click();
+          });
+          weverseLogger.info('JavaScript 클릭으로 알림 버튼 클릭 성공');
+          console.log('✅ JavaScript 클릭으로 성공');
+        } catch (jsClickError) {
+          const jsErrorMsg = jsClickError instanceof Error ? jsClickError.message : String(jsClickError);
+          weverseLogger.error('모든 클릭 방법 실패', { 
+            originalError: errorMsg,
+            jsClickError: jsErrorMsg
+          });
+          throw new Error(`알림 버튼 클릭 실패: ${errorMsg}`);
+        }
+      }
       
       // 4단계: 알림 탭 열림 확인
       console.log('⏳ 알림 탭 열림 확인 중...');
@@ -1349,11 +1569,58 @@ export class WeiverseMonitor {
               return new Date();
             }
             
-            // 정규식으로 시간 정보 추출: "2025. 07. 01 21:19"
-            const timeMatch = timeText.match(/(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})\s+(\d{1,2}):(\d{1,2})/);
+            // 새로운 위버스 시간 형식 파싱: "Jul 20, 2025, 20:25"
+            const englishTimeMatch = timeText.match(/(\w{3})\s+(\d{1,2}),\s+(\d{4}),\s+(\d{1,2}):(\d{1,2})/);
             
-            if (timeMatch) {
-              const [, year, month, day, hour, minute] = timeMatch;
+            if (englishTimeMatch) {
+              const [, monthStr, day, year, hour, minute] = englishTimeMatch;
+              
+              // 월 이름을 숫자로 변환
+              const monthMap: { [key: string]: number } = {
+                'Jan': 0, 'Feb': 1, 'Mar': 2, 'Apr': 3, 'May': 4, 'Jun': 5,
+                'Jul': 6, 'Aug': 7, 'Sep': 8, 'Oct': 9, 'Nov': 10, 'Dec': 11
+              };
+              
+              const monthNum = monthMap[monthStr];
+              if (monthNum === undefined) {
+                console.warn(`⚠️ 위버스 월 이름 인식 실패: "${monthStr}" - 현재 시간 사용`);
+                return new Date();
+              }
+              
+              // 입력값 검증
+              const yearNum = parseInt(year, 10);
+              const dayNum = parseInt(day, 10);
+              const hourNum = parseInt(hour, 10);
+              const minuteNum = parseInt(minute, 10);
+              
+              // 유효성 검사
+              if (yearNum < 2020 || yearNum > 2030 || 
+                  dayNum < 1 || dayNum > 31 ||
+                  hourNum < 0 || hourNum > 23 ||
+                  minuteNum < 0 || minuteNum > 59) {
+                console.warn(`⚠️ 위버스 시간 범위 오류: "${timeText}" - 현재 시간 사용`);
+                return new Date();
+              }
+              
+              // UTC 시간으로 직접 Date 객체 생성 (위버스 시간이 KST라고 가정)
+              const utcDate = new Date(Date.UTC(
+                yearNum,
+                monthNum, // monthMap에서 이미 0부터 시작하는 인덱스 사용
+                dayNum,
+                hourNum - 9, // KST에서 UTC로 변환 (-9시간)
+                minuteNum,
+                0 // 초
+              ));
+              
+              console.log(`⏰ 위버스 시간 파싱 성공 (영어 형식): "${timeText}" -> ${utcDate.toISOString()}`);
+              return utcDate;
+            }
+            
+            // 기존 한국식 시간 형식도 지원: "2025. 07. 01 21:19"
+            const koreanTimeMatch = timeText.match(/(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})\s+(\d{1,2}):(\d{1,2})/);
+            
+            if (koreanTimeMatch) {
+              const [, year, month, day, hour, minute] = koreanTimeMatch;
               
               // 입력값 검증
               const yearNum = parseInt(year, 10);
@@ -1372,20 +1639,17 @@ export class WeiverseMonitor {
                 return new Date();
               }
               
-              // 한국 시간(KST, UTC+9)으로 Date 객체 생성
-              const kstDate = new Date(
+              // UTC 시간으로 직접 Date 객체 생성 (위버스 시간이 KST라고 가정)
+              const utcDate = new Date(Date.UTC(
                 yearNum,
                 monthNum - 1, // JavaScript에서 월은 0부터 시작
                 dayNum,
-                hourNum,
+                hourNum - 9, // KST에서 UTC로 변환 (-9시간)
                 minuteNum,
                 0 // 초
-              );
+              ));
               
-              // 한국 시간을 UTC로 변환 (9시간 차이)
-              const utcDate = new Date(kstDate.getTime() - (9 * 60 * 60 * 1000));
-              
-              console.log(`⏰ 위버스 시간 파싱 성공: "${timeText}" -> ${utcDate.toISOString()}`);
+              console.log(`⏰ 위버스 시간 파싱 성공 (한국 형식): "${timeText}" -> ${utcDate.toISOString()}`);
               return utcDate;
             }
             
@@ -1727,10 +1991,24 @@ export class WeiverseMonitor {
   }
 
   private async attemptSessionRestore(): Promise<void> {
-    console.log('🔄 세션 복원 시도 중...');
+    sessionLogger.info('세션 복원 시도 시작');
     
     try {
-      // 기존 쿠키 확인
+      // 1. 파일에서 저장된 세션 로드
+      const savedCookies = await this.sessionManager.loadCookiesFromFile('weverse');
+      
+      if (savedCookies.length > 0) {
+        sessionLogger.info(`파일에서 저장된 쿠키 로드 완료`, { cookieCount: savedCookies.length });
+        
+        // 브라우저 컨텍스트에 쿠키 복원
+        await this.context!.clearCookies();
+        await this.context!.addCookies(savedCookies);
+        
+        sessionLogger.info('파일 기반 세션 복원 성공');
+        return;
+      }
+      
+      // 2. 기존 브라우저 컨텍스트에서 쿠키 확인 (폴백)
       const existingCookies = await this.context!.cookies();
       const weverseRelatedDomains = [
         'weverse.io',
@@ -1751,7 +2029,7 @@ export class WeiverseMonitor {
         )
       );
       
-      console.log(`기존 위버스 쿠키: ${existingWeversesCookies.length}개`);
+      sessionLogger.info(`기존 브라우저 컨텍스트 쿠키 확인`, { existingCookies: existingWeversesCookies.length });
       
       if (existingWeversesCookies.length > 0) {
         console.log('기존 쿠키 정보:');
@@ -1774,13 +2052,58 @@ export class WeiverseMonitor {
           }
         }
         
+        // 유효한 쿠키가 있으면 파일에 저장
+        if (validCookies.length > 0) {
+          await this.saveCurrentSession();
+        }
+        
         console.log(`✅ 세션 복원 완료: 유효한 쿠키 ${validCookies.length}개`);
       } else {
-        console.log('⚠️ 복원할 세션 쿠키가 없습니다');
+        sessionLogger.warn('복원할 세션 쿠키가 없습니다');
       }
       
-    } catch (error) {
-      console.error('❌ 세션 복원 실패:', error);
+    } catch (error: any) {
+      sessionLogger.error('세션 복원 실패', { error: error?.message || 'Unknown error' });
+    }
+  }
+
+  /**
+   * 현재 세션을 파일에 저장
+   */
+  private async saveCurrentSession(): Promise<void> {
+    try {
+      if (!this.context) {
+        console.warn('⚠️ [WeiverseMonitor] No context available for session save');
+        return;
+      }
+
+      const cookies = await this.context.cookies();
+      const weverseRelatedDomains = [
+        'weverse.io',
+        '.weverse.io', 
+        'account.weverse.io',
+        '.account.weverse.io',
+        'api.weverse.io',
+        '.api.weverse.io',
+        'global.weverse.io',
+        '.global.weverse.io',
+        'static.weverse.io',
+        '.static.weverse.io'
+      ];
+      
+      const weverseCookies = cookies.filter(cookie => 
+        weverseRelatedDomains.some(domain => 
+          cookie.domain === domain || cookie.domain.endsWith(domain)
+        )
+      );
+
+      if (weverseCookies.length > 0) {
+        await this.sessionManager.saveCookiesToFile('weverse', weverseCookies);
+        sessionLogger.info(`세션 저장 완료`, { cookieCount: weverseCookies.length });
+      }
+
+    } catch (error: any) {
+      sessionLogger.error('세션 저장 실패', { error: error?.message || 'Unknown error' });
     }
   }
 
@@ -1793,6 +2116,107 @@ export class WeiverseMonitor {
         return false;
       }
       
+      // 새로운 쿠키 분석 시스템 사용
+      const cookies = await this.context.cookies();
+      const analysis = this.analyzeCookiesByPriority(cookies);
+      
+      console.log(`📊 세션 무결성 검사 결과: ${analysis.summary}`);
+      
+      // 만료된 쿠키 필터링
+      const now = new Date();
+      const validCookies = [
+        ...analysis.highPriority,
+        ...analysis.mediumPriority,
+        ...analysis.lowPriority
+      ].filter(cookie => {
+        if (!cookie.expires) return true; // 세션 쿠키는 유효한 것으로 간주
+        return new Date(cookie.expires * 1000) > now;
+      });
+      
+      // 개선된 검사 기준: 고우선순위 쿠키 1개 이상 + 총 쿠키 5개 이상
+      const hasMinimumHighPriority = analysis.highPriority.length >= 1;
+      const hasMinimumTotal = analysis.total >= 5;
+      const hasValidCookies = validCookies.length >= Math.min(5, analysis.total);
+      
+      const isValid = hasMinimumHighPriority && hasMinimumTotal && hasValidCookies;
+      
+      if (!isValid) {
+        console.log('⚠️ 세션 무결성 부족 - 자동 복구 시도');
+        
+        // 만료된 쿠키 정리 및 유효한 쿠키 복원
+        if (validCookies.length < analysis.total) {
+          await this.cleanupExpiredCookies();
+          await this.restoreCriticalCookies(validCookies);
+        }
+        
+        // 백업 쿠키 복원 시도
+        const backupCookies = await this.backupCriticalCookies();
+        if (backupCookies.length > 0) {
+          const restored = await this.restoreCriticalCookies(backupCookies);
+          if (restored) {
+            console.log('✅ 백업에서 세션 복구 성공');
+            return true;
+          }
+        }
+      }
+      
+      if (isValid) {
+        console.log('✅ 세션 무결성 검사 통과');
+      } else {
+        console.log('❌ 세션 무결성 검사 실패 - 복구 불가');
+      }
+      
+      return isValid;
+      
+    } catch (error) {
+      console.error('❌ 세션 무결성 검사 오류:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 만료된 쿠키 정리
+   */
+  private async cleanupExpiredCookies(): Promise<void> {
+    try {
+      if (!this.context) return;
+
+      console.log('🧹 만료된 쿠키 정리 중...');
+      
+      for (const domain of WeiverseMonitor.WEVERSE_DOMAINS) {
+        try {
+          await this.context.clearCookies({ domain });
+        } catch (domainError) {
+          console.warn(`⚠️ 도메인 ${domain} 쿠키 정리 오류:`, domainError);
+        }
+      }
+      
+      console.log('✅ 만료된 쿠키 정리 완료');
+    } catch (error) {
+      console.error('❌ 쿠키 정리 실패:', error);
+    }
+  }
+
+  private async enhanceCookieLifespan(): Promise<void> {
+    const startTime = Date.now();
+    this.sessionMetrics.cookieRecoveryAttempts++;
+    this.logSessionStateChange('cookie-enhancing', 'enhancement-initiated', 'Cookie enhancement started', false);
+    
+    try {
+      console.log('🔧 쿠키 생명주기 관리 및 토큰 갱신 시작...');
+      
+      if (!this.context) {
+        console.log('❌ 브라우저 컨텍스트가 없습니다');
+        
+        // 브라우저 컨텍스트 없음 로깅
+        const enhancementDuration = Date.now() - startTime;
+        this.logSessionStateChange('cookie-enhancing', 'enhancement-failed', `No browser context after ${enhancementDuration}ms`, true);
+        console.log(`❌ 쿠키 강화 실패 - 브라우저 컨텍스트 없음 (소요시간: ${enhancementDuration}ms)`);
+        
+        return;
+      }
+      
+      // 1. 현재 쿠키 상태 분석
       const cookies = await this.context.cookies();
       const weverseRelatedDomains = [
         'weverse.io',
@@ -1800,64 +2224,307 @@ export class WeiverseMonitor {
         'account.weverse.io',
         '.account.weverse.io',
         'api.weverse.io',
-        '.api.weverse.io'
+        '.api.weverse.io',
+        'global.weverse.io',
+        '.global.weverse.io'
       ];
       
       const weversesCookies = cookies.filter(cookie => 
         weverseRelatedDomains.some(domain => 
           cookie.domain === domain || 
           cookie.domain.endsWith(domain) ||
-          domain.includes(cookie.domain) ||
           cookie.domain.includes('weverse')
         )
       );
       
-      // 중요한 인증 관련 쿠키 확인
-      const criticalCookies = ['access_token', 'refresh_token', 'session_id', 'auth_token', 'weverse_session'];
-      const foundCriticalCookies = weversesCookies.filter(cookie => 
-        criticalCookies.some(critical => cookie.name.toLowerCase().includes(critical.toLowerCase()))
-      );
+      console.log(`📊 현재 위버스 쿠키: ${weversesCookies.length}개`);
       
-      // 만료된 쿠키 필터링
-      const now = new Date();
-      const validCookies = weversesCookies.filter(cookie => {
-        if (!cookie.expires) return true; // 세션 쿠키는 유효한 것으로 간주
-        return new Date(cookie.expires * 1000) > now;
+      // 2. 토큰 갱신 시도 (더 근본적인 해결책)
+      await this.attemptTokenRefresh();
+      
+      // 3. 세션 쿠키 생명주기 연장 (백업 방법)
+      const enhancedCookies = weversesCookies.map(cookie => {
+        const enhanced = { ...cookie };
+        
+        // 세션 쿠키이거나 만료 시간이 짧은 경우 연장
+        // 단, 너무 과도한 연장은 피함 (3일로 조정)
+        if (!cookie.expires || cookie.expires < Date.now() / 1000 + 86400) {
+          enhanced.expires = Math.floor(Date.now() / 1000) + (3 * 24 * 60 * 60); // 3일
+          console.log(`🔧 쿠키 생명주기 연장: ${cookie.name} (3일)`);
+        }
+        
+        return enhanced;
       });
       
-      console.log(`세션 무결성 검사 결과:`);
-      console.log(`  - 총 위버스 쿠키: ${weversesCookies.length}개`);
-      console.log(`  - 유효한 쿠키: ${validCookies.length}개`);
-      console.log(`  - 중요 인증 쿠키: ${foundCriticalCookies.length}개`);
-      
-      // 개선된 검사 기준: 유효한 쿠키가 3개 이상 있거나 중요 쿠키가 1개 이상 있어야 함
-      const hasMinimumCookies = validCookies.length >= 3 || foundCriticalCookies.length >= 1;
-      
-      // 만료된 쿠키가 있으면 정리
-      if (validCookies.length < weversesCookies.length) {
-        console.log(`⚠️ 만료된 쿠키 ${weversesCookies.length - validCookies.length}개 발견, 정리 중...`);
-        try {
-          await this.context.clearCookies();
-          if (validCookies.length > 0) {
-            await this.context.addCookies(validCookies);
-            console.log(`✅ 유효한 쿠키 ${validCookies.length}개 복원 완료`);
+      // 4. 향상된 쿠키 적용
+      if (enhancedCookies.length > 0) {
+        // 기존 쿠키 제거
+        for (const domain of weverseRelatedDomains) {
+          try {
+            await this.context.clearCookies({ domain });
+          } catch (clearError) {
+            console.warn(`⚠️ 쿠키 정리 오류 (${domain}):`, clearError);
           }
-        } catch (cleanupError) {
-          console.warn('⚠️ 쿠키 정리 중 오류:', cleanupError);
+        }
+        
+        // 향상된 쿠키 추가
+        let appliedCount = 0;
+        for (const cookie of enhancedCookies) {
+          try {
+            await this.context.addCookies([cookie]);
+            appliedCount++;
+          } catch (addError) {
+            console.warn(`⚠️ 쿠키 추가 오류 (${cookie.name}):`, addError);
+          }
+        }
+        
+        console.log(`✅ 쿠키 생명주기 관리 완료: ${appliedCount}/${enhancedCookies.length}개 적용`);
+        
+        // 쿠키 강화 성공 로깅
+        this.sessionMetrics.cookieRecoverySuccesses++;
+        const enhancementDuration = Date.now() - startTime;
+        this.logSessionStateChange('cookie-enhancing', 'cookies-enhanced', `Cookie enhancement completed in ${enhancementDuration}ms: ${appliedCount}/${enhancedCookies.length} cookies applied`, true);
+        console.log(`✅ 쿠키 강화 완료 (소요시간: ${enhancementDuration}ms, 적용: ${appliedCount}/${enhancedCookies.length}개)`);
+      } else {
+        // 쿠키가 없을 경우 로깅
+        const enhancementDuration = Date.now() - startTime;
+        this.logSessionStateChange('cookie-enhancing', 'no-cookies', `No cookies to enhance after ${enhancementDuration}ms`, true);
+        console.log(`⚠️ 쿠키 강화 불필요 - 강화할 쿠키 없음 (소요시간: ${enhancementDuration}ms)`);
+      }
+      
+    } catch (error) {
+      console.error('❌ 쿠키 생명주기 관리 오류:', error);
+      
+      // 쿠키 강화 예외 로깅
+      const enhancementDuration = Date.now() - startTime;
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logSessionStateChange('cookie-enhancing', 'enhancement-error', `Cookie enhancement exception after ${enhancementDuration}ms: ${errorMessage}`, true);
+      console.log(`❌ 쿠키 강화 예외 발생 (소요시간: ${enhancementDuration}ms):`, errorMessage);
+    }
+  }
+
+  private async attemptTokenRefresh(): Promise<void> {
+    try {
+      console.log('🔄 토큰 갱신 시도 중...');
+      
+      if (!this.page) {
+        console.log('❌ 페이지가 없습니다');
+        return;
+      }
+      
+      // 위버스 메인 페이지 방문으로 토큰 갱신 유도
+      await this.page.goto('https://weverse.io/', { 
+        waitUntil: 'networkidle',
+        timeout: 10000 
+      });
+      
+      // API 호출 대기 (토큰 갱신 발생 가능)
+      await this.delay(2000);
+      
+      // 로그인 상태 확인
+      const isStillLoggedIn = await this.page.evaluate(() => {
+        // 로그인 상태 확인을 위한 DOM 요소 체크
+        const loginButton = document.querySelector('[data-testid="login-button"]');
+        const userProfile = document.querySelector('[data-testid="user-profile"]');
+        
+        return !loginButton && !!userProfile;
+      });
+      
+      if (isStillLoggedIn) {
+        console.log('✅ 토큰 갱신 성공 - 로그인 상태 유지');
+        
+        // 갱신된 쿠키 확인
+        const refreshedCookies = await this.context!.cookies();
+        const weversesCookies = refreshedCookies.filter(cookie => 
+          cookie.domain.includes('weverse')
+        );
+        
+        console.log(`📊 갱신 후 위버스 쿠키: ${weversesCookies.length}개`);
+      } else {
+        console.log('⚠️ 토큰 갱신 실패 - 재로그인 필요');
+      }
+      
+    } catch (error) {
+      console.warn('⚠️ 토큰 갱신 과정 중 오류:', error);
+    }
+  }
+
+  /**
+   * 토큰 만료 시간을 쿠키에서 추출
+   */
+  private async extractTokenExpiryTime(): Promise<number> {
+    try {
+      if (!this.context) {
+        return 0;
+      }
+
+      const cookies = await this.context.cookies();
+      const analysis = this.analyzeCookiesByPriority(cookies);
+      
+      // 고우선순위 토큰 쿠키에서 가장 빠른 만료 시간 찾기
+      let earliestExpiry = Number.MAX_SAFE_INTEGER;
+      let foundValidToken = false;
+      
+      for (const cookie of analysis.highPriority) {
+        if (cookie.expires && cookie.expires > Date.now() / 1000) {
+          const expiryMs = cookie.expires * 1000;
+          if (expiryMs < earliestExpiry) {
+            earliestExpiry = expiryMs;
+            foundValidToken = true;
+          }
+          console.log(`🔑 토큰 쿠키 ${cookie.name}: 만료 ${new Date(expiryMs).toLocaleString()}`);
         }
       }
       
-      if (hasMinimumCookies) {
-        console.log('✅ 세션 무결성 검사 통과');
-      } else {
-        console.log('❌ 세션 무결성 검사 실패 - 쿠키가 부족하거나 만료됨');
+      if (foundValidToken) {
+        this.tokenExpiryTime = earliestExpiry;
+        console.log(`⏰ 토큰 만료 시간 업데이트: ${new Date(earliestExpiry).toLocaleString()}`);
+        return earliestExpiry;
       }
       
-      return hasMinimumCookies;
+      return 0;
+    } catch (error) {
+      console.error('❌ 토큰 만료 시간 추출 실패:', error);
+      return 0;
+    }
+  }
+
+  /**
+   * 선제적 토큰 갱신 필요 여부 확인
+   */
+  private shouldPerformPreemptiveRefresh(): boolean {
+    const currentTime = Date.now();
+    
+    // 토큰 만료 시간이 설정되어 있지 않으면 체크하지 않음
+    if (this.tokenExpiryTime === 0) {
+      return false;
+    }
+    
+    // 마지막 체크 이후 충분한 시간이 지나지 않았으면 스킵
+    if (currentTime - this.lastTokenRefreshCheck < this.tokenRefreshInterval) {
+      return false;
+    }
+    
+    // 토큰 만료 6시간 전인지 확인
+    const preemptiveRefreshTime = this.preemptiveRefreshHours * 60 * 60 * 1000;
+    const timeUntilExpiry = this.tokenExpiryTime - currentTime;
+    
+    if (timeUntilExpiry <= preemptiveRefreshTime && timeUntilExpiry > 0) {
+      console.log(`⚠️ 토큰 만료 ${Math.round(timeUntilExpiry / (60 * 60 * 1000))}시간 전 - 선제적 갱신 필요`);
+      return true;
+    }
+    
+    return false;
+  }
+
+  /**
+   * 향상된 토큰 갱신 (선제적 갱신 지원)
+   */
+  async performTokenRefresh(): Promise<boolean> {
+    const startTime = Date.now();
+    this.sessionMetrics.tokenRefreshAttempts++;
+    this.logSessionStateChange('token-refreshing', 'refresh-initiated', 'Token refresh started', false);
+    
+    try {
+      console.log('🔄 향상된 토큰 갱신 시작...');
+      this.lastTokenRefreshCheck = Date.now();
+      
+      // 현재 토큰 상태 분석
+      const currentExpiry = await this.extractTokenExpiryTime();
+      
+      if (currentExpiry === 0) {
+        console.log('⚠️ 유효한 토큰을 찾을 수 없음 - 재로그인 필요');
+        
+        // 토큰 없음 로깅
+        const refreshDuration = Date.now() - startTime;
+        this.logSessionStateChange('token-refreshing', 'refresh-failed', `No valid token found after ${refreshDuration}ms`, true);
+        console.log(`❌ 토큰 갱신 실패 - 유효한 토큰 없음 (소요시간: ${refreshDuration}ms)`);
+        
+        return false;
+      }
+      
+      // 기존 토큰 갱신 로직 실행
+      await this.attemptTokenRefresh();
+      
+      // 갱신 후 토큰 만료 시간 재확인
+      const newExpiry = await this.extractTokenExpiryTime();
+      
+      if (newExpiry > currentExpiry) {
+        console.log('✅ 토큰 갱신 성공 - 만료 시간 연장됨');
+        console.log(`📅 이전: ${new Date(currentExpiry).toLocaleString()}`);
+        console.log(`📅 갱신: ${new Date(newExpiry).toLocaleString()}`);
+        
+        // 토큰 갱신 성공 로깅
+        this.sessionMetrics.tokenRefreshSuccesses++;
+        const refreshDuration = Date.now() - startTime;
+        const extensionHours = Math.round((newExpiry - currentExpiry) / (1000 * 60 * 60));
+        this.logSessionStateChange('token-refreshing', 'token-refreshed', `Token refresh successful in ${refreshDuration}ms, extended by ${extensionHours}h`, true);
+        console.log(`✅ 토큰 갱신 성공 (소요시간: ${refreshDuration}ms, 연장: ${extensionHours}시간)`);
+        
+        return true;
+      } else if (newExpiry === currentExpiry) {
+        console.log('⚠️ 토큰 갱신 후 만료 시간 변화 없음 - 갱신이 필요하지 않았을 수 있음');
+        
+        // 토큰 갱신 불필요 로깅
+        this.sessionMetrics.tokenRefreshSuccesses++;
+        const refreshDuration = Date.now() - startTime;
+        this.logSessionStateChange('token-refreshing', 'refresh-unnecessary', `Token refresh unnecessary after ${refreshDuration}ms`, true);
+        console.log(`⚠️ 토큰 갱신 불필요 (소요시간: ${refreshDuration}ms)`);
+        
+        return true; // 실패는 아니므로 true 반환
+      } else {
+        console.log('❌ 토큰 갱신 실패 - 만료 시간이 감소했거나 토큰이 무효화됨');
+        
+        // 토큰 갱신 실패 로깅
+        const refreshDuration = Date.now() - startTime;
+        this.logSessionStateChange('token-refreshing', 'refresh-failed', `Token refresh failed after ${refreshDuration}ms - expiry time decreased`, true);
+        console.log(`❌ 토큰 갱신 실패 - 만료 시간 감소 (소요시간: ${refreshDuration}ms)`);
+        
+        return false;
+      }
       
     } catch (error) {
-      console.error('❌ 세션 무결성 검사 오류:', error);
+      console.error('❌ 향상된 토큰 갱신 실패:', error);
+      
+      // 토큰 갱신 예외 로깅
+      const refreshDuration = Date.now() - startTime;
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logSessionStateChange('token-refreshing', 'refresh-error', `Token refresh exception after ${refreshDuration}ms: ${errorMessage}`, true);
+      console.log(`❌ 토큰 갱신 예외 발생 (소요시간: ${refreshDuration}ms):`, errorMessage);
+      
       return false;
+    }
+  }
+
+  /**
+   * 토큰 상태 모니터링 및 선제적 갱신
+   */
+  async monitorTokenStatus(): Promise<void> {
+    try {
+      // 토큰 만료 시간 업데이트
+      await this.extractTokenExpiryTime();
+      
+      // 선제적 갱신 필요 여부 확인
+      if (this.shouldPerformPreemptiveRefresh()) {
+        console.log('🚀 선제적 토큰 갱신 시작...');
+        const refreshSuccess = await this.performTokenRefresh();
+        
+        if (refreshSuccess) {
+          console.log('✅ 선제적 토큰 갱신 완료');
+        } else {
+          console.log('❌ 선제적 토큰 갱신 실패 - 세션 복구 시도');
+          
+          // 토큰 갱신 실패 시 세션 무결성 복구 시도
+          const integrityRestored = await this.validateSessionIntegrity();
+          if (!integrityRestored) {
+            console.log('⚠️ 세션 복구 실패 - 사용자 재로그인 권장');
+            await this.settingsService.updateSetting('needWeverseLogin', true);
+          }
+        }
+      }
+      
+    } catch (error) {
+      console.error('❌ 토큰 상태 모니터링 실패:', error);
     }
   }
 
@@ -2113,19 +2780,445 @@ export class WeiverseMonitor {
     try {
       console.log(`📢 [WeiverseMonitor] Broadcasting login status: needLogin=${needLogin}`);
       
-      // 웹 인터페이스에 상태 변경 알림
-      const { webContents } = require('electron');
-      const allWebContents = webContents.getAllWebContents();
-      allWebContents.forEach((wc: any) => {
-        if (!wc.isDestroyed()) {
-          wc.send('weverse-login-status-changed', { needLogin });
+      // 더 안전한 메인 윈도우 대상 알림 (NotificationService 패턴 사용)
+      const { BrowserWindow } = require('electron');
+      const allWindows = BrowserWindow.getAllWindows();
+      
+      let notificationsSent = 0;
+      let failedNotifications = 0;
+      
+      allWindows.forEach((window: any) => {
+        try {
+          // 메인 윈도우만 대상으로 하고, 파괴된 윈도우/WebContents 필터링
+          if (!window.isDestroyed() && 
+              window.webContents && 
+              !window.webContents.isDestroyed() &&
+              window.webContents.getURL().includes('index.html')) {
+            
+            console.log(`📢 [WeiverseMonitor] Sending login status to main window: needLogin=${needLogin}`);
+            window.webContents.send('weverse-login-status-changed', { needLogin });
+            notificationsSent++;
+          }
+        } catch (windowError) {
+          console.error(`❌ [WeiverseMonitor] Failed to send to specific window:`, windowError);
+          failedNotifications++;
         }
       });
       
+      console.log(`📊 [WeiverseMonitor] Login status broadcast complete: ${notificationsSent} sent, ${failedNotifications} failed`);
+      
+      // 백업: 전체 WebContents 대상 (안전성 강화)
+      if (notificationsSent === 0) {
+        console.log(`⚠️ [WeiverseMonitor] No main window found, trying fallback method`);
+        
+        try {
+          const { webContents } = require('electron');
+          const allWebContents = webContents.getAllWebContents();
+          let fallbackSent = 0;
+          
+          allWebContents.forEach((wc: any) => {
+            try {
+              if (!wc.isDestroyed() && wc.getURL && wc.getURL().includes('index.html')) {
+                wc.send('weverse-login-status-changed', { needLogin });
+                fallbackSent++;
+              }
+            } catch (fallbackError) {
+              // 개별 WebContents 오류는 무시
+            }
+          });
+          
+          console.log(`📊 [WeiverseMonitor] Fallback broadcast: ${fallbackSent} sent`);
+        } catch (fallbackError) {
+          console.error(`❌ [WeiverseMonitor] Fallback broadcast failed:`, fallbackError);
+        }
+      }
+      
     } catch (error) {
-      console.error('Failed to notify Weverse login status change:', error);
+      console.error('❌ [WeiverseMonitor] Failed to notify Weverse login status change:', error);
     }
   }
+
+  /**
+   * 쿠키를 우선순위별로 분류하고 분석
+   */
+  private analyzeCookiesByPriority(cookies: any[]): {
+    highPriority: any[];
+    mediumPriority: any[];
+    lowPriority: any[];
+    total: number;
+    summary: string;
+  } {
+    const weversesCookies = cookies.filter(cookie => 
+      WeiverseMonitor.WEVERSE_DOMAINS.some(domain => 
+        cookie.domain === domain || 
+        cookie.domain.endsWith(domain) ||
+        domain.includes(cookie.domain) ||
+        cookie.domain.includes('weverse')
+      )
+    );
+
+    const highPriority = weversesCookies.filter(cookie => 
+      WeiverseMonitor.CRITICAL_COOKIES.HIGH_PRIORITY.some(critical => 
+        cookie.name.toLowerCase().includes(critical.toLowerCase())
+      )
+    );
+
+    const mediumPriority = weversesCookies.filter(cookie => 
+      WeiverseMonitor.CRITICAL_COOKIES.MEDIUM_PRIORITY.some(critical => 
+        cookie.name.toLowerCase().includes(critical.toLowerCase())
+      )
+    );
+
+    const lowPriority = weversesCookies.filter(cookie => 
+      WeiverseMonitor.CRITICAL_COOKIES.LOW_PRIORITY.some(critical => 
+        cookie.name.toLowerCase().includes(critical.toLowerCase())
+      )
+    );
+
+    const summary = `총 ${weversesCookies.length}개 (고우선순위: ${highPriority.length}, 중우선순위: ${mediumPriority.length}, 저우선순위: ${lowPriority.length})`;
+
+    return {
+      highPriority,
+      mediumPriority,
+      lowPriority,
+      total: weversesCookies.length,
+      summary
+    };
+  }
+
+  /**
+   * 중요 쿠키를 백업
+   */
+  private async backupCriticalCookies(): Promise<any[]> {
+    try {
+      if (!this.context) {
+        console.warn('⚠️ 브라우저 컨텍스트가 없어 쿠키 백업 불가');
+        return [];
+      }
+
+      const cookies = await this.context.cookies();
+      const analysis = this.analyzeCookiesByPriority(cookies);
+      
+      console.log(`🔒 중요 쿠키 백업 중... ${analysis.summary}`);
+      
+      // 우선순위 순으로 백업
+      const backupCookies = [
+        ...analysis.highPriority,
+        ...analysis.mediumPriority,
+        ...analysis.lowPriority
+      ];
+
+      // 쿠키 만료 시간 연장 처리
+      const enhancedCookies = backupCookies.map(cookie => {
+        const enhanced = { ...cookie };
+        
+        // 세션 쿠키이거나 만료 시간이 짧은 경우 연장 (7일로 확대)
+        if (!cookie.expires || cookie.expires < Date.now() / 1000 + 86400) {
+          enhanced.expires = Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60); // 7일
+          console.log(`🔧 쿠키 만료 시간 연장: ${cookie.name} (7일)`);
+        }
+        
+        return enhanced;
+      });
+
+      console.log(`✅ 중요 쿠키 백업 완료: ${enhancedCookies.length}개`);
+      return enhancedCookies;
+
+    } catch (error) {
+      console.error('❌ 중요 쿠키 백업 실패:', error);
+      return [];
+    }
+  }
+
+  /**
+   * 백업된 쿠키를 복원
+   */
+  private async restoreCriticalCookies(backupCookies: any[]): Promise<boolean> {
+    try {
+      if (!this.context) {
+        const errorMsg = '브라우저 컨텍스트가 없어 쿠키 복원 불가';
+        weverseLogger.error(errorMsg);
+        console.warn('⚠️ ' + errorMsg);
+        return false;
+      }
+
+      if (!backupCookies || backupCookies.length === 0) {
+        const warnMsg = '복원할 백업 쿠키가 없음';
+        weverseLogger.warn(warnMsg);
+        console.warn('⚠️ ' + warnMsg);
+        return false;
+      }
+
+      weverseLogger.info('백업 쿠키 복원 시작', { totalCookies: backupCookies.length });
+      console.log(`🔄 백업 쿠키 복원 중... ${backupCookies.length}개`);
+      
+      let successCount = 0;
+      let highPrioritySuccess = 0;
+      const failedCookies: string[] = [];
+      
+      // 우선순위별로 복원 시도
+      for (const cookie of backupCookies) {
+        try {
+          await this.context.addCookies([cookie]);
+          successCount++;
+          
+          // 고우선순위 쿠키 성공 개수 계산
+          if (WeiverseMonitor.CRITICAL_COOKIES.HIGH_PRIORITY.some(critical => 
+            cookie.name.toLowerCase().includes(critical.toLowerCase()))) {
+            highPrioritySuccess++;
+          }
+          
+          weverseLogger.debug('쿠키 복원 성공', { cookieName: cookie.name, domain: cookie.domain });
+          console.log(`✅ 쿠키 복원 성공: ${cookie.name} (도메인: ${cookie.domain})`);
+        } catch (restoreError) {
+          const errorMessage = restoreError instanceof Error ? restoreError.message : String(restoreError);
+          failedCookies.push(cookie.name);
+          weverseLogger.warn('쿠키 복원 실패', { 
+            cookieName: cookie.name, 
+            domain: cookie.domain, 
+            error: errorMessage 
+          });
+          console.warn(`⚠️ 쿠키 복원 실패 (${cookie.name}):`, restoreError);
+        }
+      }
+
+      const successRate = (successCount / backupCookies.length) * 100;
+      const isSuccess = successRate >= 70 && highPrioritySuccess >= 1;
+      
+      weverseLogger.info('쿠키 복원 완료', {
+        successCount,
+        totalCount: backupCookies.length,
+        successRate: Number(successRate.toFixed(1)),
+        highPrioritySuccess,
+        isSuccess,
+        failedCookies: failedCookies.length > 0 ? failedCookies : undefined
+      });
+      
+      console.log(`📊 쿠키 복원 결과: ${successCount}/${backupCookies.length}개 성공 (${successRate.toFixed(1)}%)`);
+      console.log(`🔑 고우선순위 쿠키 복원: ${highPrioritySuccess}개`);
+
+      // 복원 성공률이 70% 이상이고 고우선순위 쿠키가 최소 1개 이상 복원되면 성공으로 간주
+      return isSuccess;
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      weverseLogger.error('쿠키 복원 실패', { error: errorMessage });
+      console.error('❌ 쿠키 복원 실패:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 쿠키 무결성 검사 및 자동 복구
+   */
+  private async validateAndRepairCookies(): Promise<boolean> {
+    try {
+      if (!this.context) {
+        return false;
+      }
+
+      const cookies = await this.context.cookies();
+      const analysis = this.analyzeCookiesByPriority(cookies);
+      
+      console.log(`🔍 쿠키 무결성 검사: ${analysis.summary}`);
+
+      // 무결성 검사 기준
+      const hasMinimumHighPriority = analysis.highPriority.length >= 1;
+      const hasMinimumTotal = analysis.total >= 5;
+      
+      if (hasMinimumHighPriority && hasMinimumTotal) {
+        console.log('✅ 쿠키 무결성 검사 통과');
+        return true;
+      }
+
+      console.log('⚠️ 쿠키 무결성 검사 실패 - 복구 시도');
+      
+      // 백업에서 복원 시도
+      const backupCookies = await this.backupCriticalCookies();
+      if (backupCookies.length > 0) {
+        return await this.restoreCriticalCookies(backupCookies);
+      }
+
+      return false;
+
+    } catch (error) {
+      console.error('❌ 쿠키 무결성 검사 실패:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 세션 무결성 검증 (Public API)
+   */
+  async checkSessionIntegrity(): Promise<boolean> {
+    return await this.validateSessionIntegrity();
+  }
+
+  /**
+   * 쿠키 생명주기 강화 (Public API)
+   */
+  async enhanceSessionPersistence(): Promise<void> {
+    return await this.enhanceCookieLifespan();
+  }
+
+  /**
+   * 토큰 상태 모니터링 및 선제적 갱신 (Public API)
+   */
+  async performTokenMonitoring(): Promise<void> {
+    return await this.monitorTokenStatus();
+  }
+
+  /**
+   * 직접 토큰 갱신 수행 (Public API)
+   */
+  async forceTokenRefresh(): Promise<boolean> {
+    return await this.performTokenRefresh();
+  }
+
+  /**
+   * 세션 메트릭 조회 (Public API)
+   */
+  getSessionMetrics() {
+    return {
+      ...this.sessionMetrics,
+      currentTime: Date.now(),
+      uptimeHours: this.sessionMetrics.totalUptime / (1000 * 60 * 60),
+      successRate: {
+        login: this.sessionMetrics.loginAttempts > 0 ? 
+          (this.sessionMetrics.loginSuccesses / this.sessionMetrics.loginAttempts * 100).toFixed(1) + '%' : 'N/A',
+        tokenRefresh: this.sessionMetrics.tokenRefreshAttempts > 0 ? 
+          (this.sessionMetrics.tokenRefreshSuccesses / this.sessionMetrics.tokenRefreshAttempts * 100).toFixed(1) + '%' : 'N/A',
+        cookieRecovery: this.sessionMetrics.cookieRecoveryAttempts > 0 ? 
+          (this.sessionMetrics.cookieRecoverySuccesses / this.sessionMetrics.cookieRecoveryAttempts * 100).toFixed(1) + '%' : 'N/A'
+      }
+    };
+  }
+
+  /**
+   * 디버깅 정보 덤프 (Public API)
+   */
+  async dumpDebugInfo(): Promise<any> {
+    try {
+      const debugInfo: any = {
+        timestamp: new Date().toISOString(),
+        metrics: this.getSessionMetrics(),
+        sessionState: {
+          isLoggedIn: this.isLoggedIn,
+          lastKnownLoginStatus: this.lastKnownLoginStatus,
+          loginCheckInProgress: this.loginCheckInProgress,
+          tokenExpiryTime: this.tokenExpiryTime ? new Date(this.tokenExpiryTime).toISOString() : null,
+          lastTokenRefreshCheck: this.lastTokenRefreshCheck ? new Date(this.lastTokenRefreshCheck).toISOString() : null
+        },
+        browserState: {
+          hasContext: !!this.context,
+          hasPage: !!this.page,
+          browserDataPath: this.browserDataPath,
+          isPersistentContext: this.isPersistentContext
+        }
+      };
+
+      if (this.context) {
+        try {
+          const cookies = await this.context.cookies();
+          const analysis = this.analyzeCookiesByPriority(cookies);
+          debugInfo['cookieState'] = {
+            analysis: analysis.summary,
+            highPriority: analysis.highPriority.length,
+            mediumPriority: analysis.mediumPriority.length,
+            lowPriority: analysis.lowPriority.length,
+            total: analysis.total
+          };
+        } catch (cookieError) {
+          const errorMessage = cookieError instanceof Error ? cookieError.message : String(cookieError);
+          debugInfo['cookieState'] = { error: errorMessage };
+        }
+      }
+
+      console.log('🔍 위버스 디버그 정보 덤프:');
+      console.log(JSON.stringify(debugInfo, null, 2));
+
+      return debugInfo;
+    } catch (error) {
+      console.error('❌ 디버그 정보 덤프 실패:', error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return { error: errorMessage };
+    }
+  }
+
+  /**
+   * 세션 상태 변화 기록
+   */
+  private logSessionStateChange(from: string, to: string, reason: string, success: boolean): void {
+    const change = {
+      timestamp: Date.now(),
+      from,
+      to,
+      reason,
+      success
+    };
+    
+    this.sessionMetrics.sessionStateChanges.push(change);
+    
+    // 최근 100개 변화만 유지
+    if (this.sessionMetrics.sessionStateChanges.length > 100) {
+      this.sessionMetrics.sessionStateChanges = this.sessionMetrics.sessionStateChanges.slice(-100);
+    }
+    
+    // 상세 로깅
+    const emoji = success ? '✅' : '❌';
+    const timestamp = new Date(change.timestamp).toLocaleString();
+    console.log(`${emoji} 세션 상태 변화: ${from} → ${to} (${reason}) [${timestamp}]`);
+    
+    // 실패한 상태 변화의 경우 추가 정보 로깅
+    if (!success) {
+      this.sessionMetrics.sessionFailures++;
+      console.warn(`⚠️ 세션 실패 #${this.sessionMetrics.sessionFailures}: ${reason}`);
+    }
+  }
+
+  /**
+   * 메트릭 업데이트
+   */
+  private updateMetrics(type: 'login' | 'tokenRefresh' | 'cookieRecovery', success: boolean): void {
+    switch (type) {
+      case 'login':
+        this.sessionMetrics.loginAttempts++;
+        if (success) {
+          this.sessionMetrics.loginSuccesses++;
+          this.sessionMetrics.lastLoginTime = Date.now();
+        }
+        break;
+      case 'tokenRefresh':
+        this.sessionMetrics.tokenRefreshAttempts++;
+        if (success) {
+          this.sessionMetrics.tokenRefreshSuccesses++;
+        }
+        break;
+      case 'cookieRecovery':
+        this.sessionMetrics.cookieRecoveryAttempts++;
+        if (success) {
+          this.sessionMetrics.cookieRecoverySuccesses++;
+        }
+        break;
+    }
+    
+    // 성공률 로깅 (매 10번마다)
+    if (type === 'login' && this.sessionMetrics.loginAttempts % 10 === 0) {
+      const successRate = (this.sessionMetrics.loginSuccesses / this.sessionMetrics.loginAttempts * 100).toFixed(1);
+      console.log(`📊 로그인 성공률: ${successRate}% (${this.sessionMetrics.loginSuccesses}/${this.sessionMetrics.loginAttempts})`);
+    }
+  }
+
+  /**
+   * 업타임 업데이트
+   */
+  private updateUptime(): void {
+    if (this.sessionMetrics.lastLoginTime > 0) {
+      const currentUptime = Date.now() - this.sessionMetrics.lastLoginTime;
+      this.sessionMetrics.totalUptime = currentUptime;
+    }
+  }
+
 
   async cleanup(): Promise<void> {
     try {
