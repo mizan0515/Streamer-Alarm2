@@ -127,9 +127,11 @@ export class StreamerSearchService {
   private async searchTwitter(name: string): Promise<StreamerSearchResult[]> {
     // 방법 1: Nitter 인스턴스를 통한 검색
     const nitterInstances = [
-      'https://nitter.net',
-      'https://nitter.it',
-      'https://nitter.unixfox.eu'
+      'https://xcancel.com',
+      'https://nitter.poast.org',
+      'https://nitter.privacyredirect.com',
+      'https://nitter.tiekoetter.com',
+      'https://nitter.kareem.one'
     ];
 
     for (const instance of nitterInstances) {

@@ -1,5 +1,4 @@
 import { chromium, Browser, BrowserContext, Page } from 'playwright';
-import { execSync } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
@@ -207,93 +206,82 @@ export class WeiverseMonitor {
     }
   }
 
-  private async ensureBrowserInstalled(): Promise<void> {
-    try {
-      // 브라우저 설치 확인 로그 간소화
-      const browserPath = chromium.executablePath();
-      
-      if (browserPath && fs.existsSync(browserPath)) {
-        // console.log('✅ Playwright Chromium already installed'); // 브라우저 설치 로그 간소화
-        return;
-      }
-      
-      console.log('📦 Playwright Chromium 설치 중...');
-      
-      let playwrightCliPath: string;
-      
-      if (app.isPackaged) {
-        playwrightCliPath = path.join(
-          process.resourcesPath,
-          'app.asar.unpacked',
-          'node_modules',
-          'playwright',
-          'cli.js'
-        );
-      } else {
-        playwrightCliPath = path.join(
-          __dirname,
-          '..',
-          '..',
-          '..',
-          'node_modules',
-          'playwright',
-          'cli.js'
-        );
-      }
-      
-      if (fs.existsSync(playwrightCliPath)) {
-        // console.log('Installing Chromium browser for Weverse...'); // 브라우저 설치 로그 간소화
+  /**
+   * 시스템 브라우저를 감지하고 실행하는 함수
+   * Chrome > Edge > Chromium 순으로 시도
+   */
+  private async launchSystemBrowser(): Promise<BrowserContext | null> {
+    const browsers = [
+      { name: 'Chrome', channel: 'chrome' as const },
+      { name: 'Edge', channel: 'msedge' as const }
+    ];
+
+    for (const browserInfo of browsers) {
+      try {
+        console.log(`🔍 ${browserInfo.name} 브라우저 시도 중...`);
         
-        const electronNodePath = process.execPath;
-        execSync(`"${electronNodePath}" "${playwrightCliPath}" install chromium`, {
-          stdio: 'pipe',
-          timeout: 120000
-        });
-        console.log('✅ Playwright Chromium 설치 완료');
-      } else {
-        console.warn('⚠️ Playwright CLI 없음 - 수동 설치 필요');
+        const launchOptions = {
+          headless: true,
+          args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--no-first-run',
+            '--no-zygote',
+            '--disable-gpu',
+            '--disable-blink-features=AutomationControlled',
+            '--disable-background-networking',
+            '--disable-default-apps',
+            '--disable-component-extensions-with-background-pages'
+          ],
+          userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+          viewport: { width: 1280, height: 720 },
+          locale: 'ko-KR',
+          extraHTTPHeaders: {
+            'Accept-Language': 'ko-KR,ko;q=0.9,en;q=0.8'
+          },
+          channel: browserInfo.channel
+        };
+
+        const context = await chromium.launchPersistentContext(this.browserDataPath, launchOptions);
+
+        console.log(`✅ ${browserInfo.name} 브라우저 실행 성공`);
+        
+        // 브라우저 정보를 설정에 저장 (사용자 정보용)
+        if (this.settingsService) {
+          await this.settingsService.updateSetting('currentBrowser', browserInfo.name);
+        }
+        
+        return context;
+        
+      } catch (error: any) {
+        console.warn(`⚠️ ${browserInfo.name} 브라우저 실행 실패:`, error.message);
+        continue;
       }
-    } catch (error: any) {
-      console.error('❌ Failed to install Playwright browser:', error.message);
     }
+
+    console.error('❌ 시스템에 Chrome 또는 Edge 브라우저를 찾을 수 없습니다.');
+    console.error('💡 해결 방법:');
+    console.error('   1. Google Chrome 설치: https://www.google.com/chrome/');
+    console.error('   2. Microsoft Edge 설치: https://www.microsoft.com/edge');
+    console.error('   3. 브라우저 업데이트 후 재시도');
+    console.error('   4. 관리자 권한으로 애플리케이션 실행');
+    
+    throw new Error('Chrome 또는 Edge 브라우저가 필요합니다. 브라우저를 설치한 후 다시 시도해주세요.');
   }
+
 
   private async setupBrowser(): Promise<void> {
     if (this.context) return;
 
     try {
-      await this.ensureBrowserInstalled();
+      // 시스템 브라우저 사용 (Chrome > Edge > Chromium 순으로 시도)
+      this.context = await this.launchSystemBrowser();
       
-      this.context = await chromium.launchPersistentContext(this.browserDataPath, {
-        headless: true,
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-accelerated-2d-canvas',
-          '--no-first-run',
-          '--no-zygote',
-          '--disable-gpu',
-          '--disable-blink-features=AutomationControlled',
-          '--disable-features=VizDisplayCompositor',
-          '--disable-web-security',
-          '--disable-features=TranslateUI',
-          '--disable-extensions-except',
-          '--disable-plugins-discovery',
-          '--disable-default-apps',
-          '--disable-component-extensions-with-background-pages'
-        ],
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-        viewport: { width: 1280, height: 720 },
-        locale: 'ko-KR',
-        extraHTTPHeaders: {
-          'Accept-Language': 'ko-KR,ko;q=0.9,en;q=0.8'
-        },
-        // 세션 지속성 강화를 위한 추가 설정
-        acceptDownloads: false,
-        permissions: ['notifications'],
-        colorScheme: 'no-preference'
-      });
+      if (!this.context) {
+        throw new Error('브라우저 컨텍스트 생성 실패');
+      }
 
       this.isPersistentContext = true;
       this.page = await this.context.newPage();
@@ -743,13 +731,36 @@ export class WeiverseMonitor {
       // 사용자 프로필 경로 설정 (영구 프로필 사용 - 모니터링과 동일한 컨텍스트)
       const userDataDir = this.browserDataPath;
       
-      const loginBrowser = await chromium.launchPersistentContext(userDataDir, {
-        headless: false,
-        args: [
-          '--no-first-run',
-          '--disable-blink-features=AutomationControlled'
-        ]
-      });
+      // 로그인용 시스템 브라우저 시도 (headless: false)
+      let loginBrowser: BrowserContext | null = null;
+      
+      const loginBrowsers = [
+        { name: 'Chrome', channel: 'chrome' as const },
+        { name: 'Edge', channel: 'msedge' as const }
+      ];
+
+      for (const browserInfo of loginBrowsers) {
+        try {
+          console.log(`🔍 로그인용 ${browserInfo.name} 브라우저 시도 중...`);
+          loginBrowser = await chromium.launchPersistentContext(userDataDir, {
+            headless: false,
+            channel: browserInfo.channel,
+            args: [
+              '--no-first-run',
+              '--disable-blink-features=AutomationControlled'
+            ]
+          });
+          console.log(`✅ 로그인용 ${browserInfo.name} 브라우저 실행 성공`);
+          break;
+        } catch (error: any) {
+          console.warn(`⚠️ 로그인용 ${browserInfo.name} 실행 실패:`, error.message);
+          continue;
+        }
+      }
+
+      if (!loginBrowser) {
+        throw new Error('로그인용 브라우저를 실행할 수 없습니다. Chrome 또는 Edge를 설치해주세요.');
+      }
 
       // PersistentContext 사용 시 별도 context 생성 불필요
       const loginPage = await loginBrowser.newPage();

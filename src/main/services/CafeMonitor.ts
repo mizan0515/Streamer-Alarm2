@@ -1,5 +1,4 @@
 import { chromium, Browser, BrowserContext, Page } from 'playwright';
-import { execSync } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import { app } from 'electron';
@@ -77,87 +76,75 @@ export class CafeMonitor {
     }
   }
 
-  private async ensureBrowserInstalled(): Promise<void> {
-    try {
-      console.log('🔍 Checking Playwright browser installation...');
-      
-      // Chromium 설치 여부 확인
-      const browserPath = chromium.executablePath();
-      
-      if (browserPath && fs.existsSync(browserPath)) {
-        console.log('✅ Playwright Chromium already installed');
-        return;
-      }
-      
-      console.log('📦 Playwright Chromium not found, attempting installation...');
-      
-      // 프로덕션 환경에서 Playwright CLI 경로 찾기
-      let playwrightCliPath: string;
-      
-      if (app.isPackaged) {
-        // 패키징된 앱에서는 asar.unpacked 경로 사용
-        playwrightCliPath = path.join(
-          process.resourcesPath,
-          'app.asar.unpacked',
-          'node_modules',
-          'playwright',
-          'cli.js'
-        );
-      } else {
-        // 개발 환경에서는 일반 node_modules 경로 사용
-        playwrightCliPath = path.join(
-          __dirname,
-          '..',
-          '..',
-          '..',
-          'node_modules',
-          'playwright',
-          'cli.js'
-        );
-      }
-      
-      if (fs.existsSync(playwrightCliPath)) {
-        console.log('Installing Chromium browser...');
+  /**
+   * 시스템 브라우저를 감지하고 실행하는 함수
+   * Chrome > Edge > Chromium 순으로 시도
+   */
+  private async launchSystemBrowser(): Promise<BrowserContext | null> {
+    const browsers = [
+      { name: 'Chrome', channel: 'chrome' as const },
+      { name: 'Edge', channel: 'msedge' as const }
+    ];
+
+    for (const browserInfo of browsers) {
+      try {
+        console.log(`🔍 ${browserInfo.name} 브라우저 시도 중...`);
         
-        // Electron의 Node.js 사용 (시스템 Node.js에 의존하지 않음)
-        const electronNodePath = process.execPath;
-        execSync(`"${electronNodePath}" "${playwrightCliPath}" install chromium`, {
-          stdio: 'pipe',
-          timeout: 120000 // 2분 타임아웃
-        });
-        console.log('✅ Playwright Chromium installed successfully');
-      } else {
-        console.warn('⚠️ Playwright CLI not found, browser may need manual installation');
+        const launchOptions = {
+          headless: true,
+          args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--no-first-run',
+            '--no-zygote',
+            '--disable-gpu'
+          ],
+          userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          viewport: { width: 1280, height: 720 },
+          locale: 'ko-KR',
+          channel: browserInfo.channel
+        };
+
+        const context = await chromium.launchPersistentContext(this.browserDataPath, launchOptions);
+
+        console.log(`✅ ${browserInfo.name} 브라우저 실행 성공`);
+        
+        // 브라우저 정보를 설정에 저장 (사용자 정보용)
+        if (this.settingsService) {
+          await this.settingsService.updateSetting('currentCafeBrowser', browserInfo.name);
+        }
+        
+        return context;
+        
+      } catch (error: any) {
+        console.warn(`⚠️ ${browserInfo.name} 브라우저 실행 실패:`, error.message);
+        continue;
       }
-    } catch (error: any) {
-      console.error('❌ Failed to install Playwright browser:', error.message);
-      // 설치 실패해도 계속 시도 (브라우저가 이미 있을 수 있음)
     }
+
+    console.error('❌ 시스템에 Chrome 또는 Edge 브라우저를 찾을 수 없습니다.');
+    console.error('💡 해결 방법:');
+    console.error('   1. Google Chrome 설치: https://www.google.com/chrome/');
+    console.error('   2. Microsoft Edge 설치: https://www.microsoft.com/edge');
+    console.error('   3. 브라우저 업데이트 후 재시도');
+    console.error('   4. 관리자 권한으로 애플리케이션 실행');
+    
+    throw new Error('Chrome 또는 Edge 브라우저가 필요합니다. 브라우저를 설치한 후 다시 시도해주세요.');
   }
+
 
   private async setupBrowser(): Promise<void> {
     if (this.context) return;
 
     try {
-      // Playwright 브라우저 바이너리 확인 및 설치
-      await this.ensureBrowserInstalled();
+      // 시스템 브라우저 사용 (Chrome > Edge > Chromium 순으로 시도)
+      this.context = await this.launchSystemBrowser();
       
-      // Chromium 브라우저 시작 (영구 데이터 디렉토리 사용)
-      this.context = await chromium.launchPersistentContext(this.browserDataPath, {
-        headless: true,
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-accelerated-2d-canvas',
-          '--no-first-run',
-          '--no-zygote',
-          '--disable-gpu'
-        ],
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        viewport: { width: 1280, height: 720 },
-        locale: 'ko-KR'
-      });
+      if (!this.context) {
+        throw new Error('브라우저 컨텍스트 생성 실패');
+      }
 
       // 영구 컨텍스트 사용 플래그 설정
       this.isPersistentContext = true;
@@ -370,18 +357,40 @@ export class CafeMonitor {
 
   async initiateLogin(): Promise<boolean> {
     try {
-      // 로그인 전용 브라우저 인스턴스 생성 (headless: false)
-      const loginBrowser = await chromium.launch({
-        headless: false, // 사용자가 볼 수 있는 브라우저 창 표시
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-accelerated-2d-canvas',
-          '--no-first-run',
-          '--no-zygote'
-        ]
-      });
+      // 로그인용 시스템 브라우저 시도 (headless: false)
+      let loginBrowser: Browser | null = null;
+      
+      const loginBrowsers = [
+        { name: 'Chrome', channel: 'chrome' as const },
+        { name: 'Edge', channel: 'msedge' as const }
+      ];
+
+      for (const browserInfo of loginBrowsers) {
+        try {
+          console.log(`🔍 로그인용 ${browserInfo.name} 브라우저 시도 중...`);
+          loginBrowser = await chromium.launch({
+            headless: false,
+            channel: browserInfo.channel,
+            args: [
+              '--no-sandbox',
+              '--disable-setuid-sandbox',
+              '--disable-dev-shm-usage',
+              '--disable-accelerated-2d-canvas',
+              '--no-first-run',
+              '--no-zygote'
+            ]
+          });
+          console.log(`✅ 로그인용 ${browserInfo.name} 브라우저 실행 성공`);
+          break;
+        } catch (error: any) {
+          console.warn(`⚠️ 로그인용 ${browserInfo.name} 실행 실패:`, error.message);
+          continue;
+        }
+      }
+
+      if (!loginBrowser) {
+        throw new Error('로그인용 브라우저를 실행할 수 없습니다. Chrome 또는 Edge를 설치해주세요.');
+      }
 
       // 로그인 전용 컨텍스트 생성
       const loginContext = await loginBrowser.newContext({

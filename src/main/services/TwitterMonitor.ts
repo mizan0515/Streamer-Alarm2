@@ -24,10 +24,11 @@ export class TwitterMonitor {
   // Nitter 인스턴스 목록 (백업 지원)
   private nitterInstances = [
     'https://nitter.dashy.a3x.dn.nyx.im',
-    'https://nitter.net',
-    'https://nitter.it',
-    'https://nitter.privacydev.net',
-    'https://nitter.poast.org'
+    'https://xcancel.com',
+    'https://nitter.poast.org',
+    'https://nitter.privacyredirect.com',
+    'https://nitter.tiekoetter.com',
+    'https://nitter.kareem.one'
   ];
   
   private currentInstanceIndex = 0;
@@ -180,13 +181,23 @@ export class TwitterMonitor {
         : error?.code || error?.message || 'Unknown error';
       console.error(`RSS fetch failed for ${url}: ${errorMsg}`);
       
+      // 봇 차단 감지 (403, 429, 502, 503 등)
+      const blockedCodes = [403, 429, 502, 503];
+      const statusCode = error?.response?.status;
+      
+      if (statusCode && blockedCodes.includes(statusCode)) {
+        console.warn(`Instance ${this.nitterInstances[this.currentInstanceIndex]} appears to be blocked (${statusCode})`);
+      }
+      
       // 다른 Nitter 인스턴스로 재시도
       if (retryCount < this.nitterInstances.length - 1) {
         this.currentInstanceIndex = (this.currentInstanceIndex + 1) % this.nitterInstances.length;
         const newUrl = url.replace(/https:\/\/[^\/]+/, this.nitterInstances[this.currentInstanceIndex]);
         console.log(`Retrying with instance: ${this.nitterInstances[this.currentInstanceIndex]}`);
         
-        await this.delay(2000); // 재시도 전 대기
+        // 봇 차단된 경우 더 긴 대기 시간
+        const delay = (statusCode && blockedCodes.includes(statusCode)) ? 5000 : 2000;
+        await this.delay(delay);
         return await this.fetchRSSFeed(newUrl, retryCount + 1);
       }
       

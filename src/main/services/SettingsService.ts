@@ -112,7 +112,9 @@ export class SettingsService {
       theme: 'dark',
       needNaverLogin: 'true',
       needWeverseLogin: 'true',
-      newStreamerFilterHours: '24' // 새 스트리머 과거 알림 필터링 시간 (기본 24시간)
+      newStreamerFilterHours: '24', // 새 스트리머 과거 알림 필터링 시간 (기본 24시간)
+      currentBrowser: 'Chrome', // 기본 브라우저 (Weverse용)
+      currentCafeBrowser: 'Chrome' // 기본 브라우저 (Cafe용)
     };
 
     return defaults[key] || '';
