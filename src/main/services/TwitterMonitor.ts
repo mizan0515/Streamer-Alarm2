@@ -148,7 +148,7 @@ export class TwitterMonitor {
           const filterHours = this.settingsService ? parseInt(this.settingsService.getSetting('newStreamerFilterHours')) : 24;
           
           if (hoursAgo > filterHours) {
-            console.log(`⏰ ${streamer.name}: 트윗 "${tweet.content.substring(0, 50)}..." - ${filterHours}시간 이상 경과 (${hoursAgo.toFixed(1)}시간), 알림 차단`);
+            console.log(`⏰ ${streamer.name}: ${filterHours}시간 이상 경과 트윗 차단 (${hoursAgo.toFixed(1)}시간 전)`);
             continue;
           }
           
@@ -173,8 +173,12 @@ export class TwitterMonitor {
       const response = await this.httpClient.get(url);
       const feed = await this.rssParser.parseString(response.data);
       return feed;
-    } catch (error) {
-      console.error(`RSS fetch failed for ${url}:`, error);
+    } catch (error: any) {
+      // RSS fetch 에러 로그 간소화 - 핵심 정보만 표시
+      const errorMsg = error?.response?.status 
+        ? `HTTP ${error.response.status}` 
+        : error?.code || error?.message || 'Unknown error';
+      console.error(`RSS fetch failed for ${url}: ${errorMsg}`);
       
       // 다른 Nitter 인스턴스로 재시도
       if (retryCount < this.nitterInstances.length - 1) {
@@ -213,7 +217,7 @@ export class TwitterMonitor {
 
       // RSS pubDate 파싱 (안전한 방식)
       const originalTimestamp = this.parseTwitterDate(item.pubDate);
-      console.log(`@${username}: 트윗 "${content.substring(0, 50)}..." - RSS 시간: ${item.pubDate} → 파싱된 시간: ${originalTimestamp.toISOString()}`);
+      // RSS 파싱 로그 간소화 - 개별 트윗 내용은 생략
 
       return {
         id: tweetId,

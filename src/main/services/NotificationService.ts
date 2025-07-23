@@ -19,7 +19,7 @@ export class NotificationService {
   private globalHandlersInitialized: boolean = false;
 
   constructor(databaseManager: DatabaseManager) {
-    console.log(`[DEBUG] NotificationService constructor called`);
+    // console.log(`[DEBUG] NotificationService constructor called`); // 디버그 로그 간소화
     this.databaseManager = databaseManager;
     this.settingsService = new SettingsService(databaseManager);
     
@@ -29,9 +29,9 @@ export class NotificationService {
     this.ensureTempDirectory();
     
     // 글로벌 이벤트 핸들러 설정
-    console.log(`[DEBUG] About to setup global event handlers...`);
+    // console.log(`[DEBUG] About to setup global event handlers...`); // 디버그 로그 간소화
     this.setupGlobalEventHandlers();
-    console.log(`[DEBUG] NotificationService constructor completed`);
+    // console.log(`[DEBUG] NotificationService constructor completed`); // 디버그 로그 간소화
   }
 
   /**
@@ -40,26 +40,26 @@ export class NotificationService {
    */
   async initializeDuplicateCheck(): Promise<void> {
     try {
-      console.log(`[DUPLICATE_INIT] 🔄 Initializing duplicate check system...`);
+      // console.log(`[DUPLICATE_INIT] 🔄 Initializing duplicate check system...`); // 중복 체크 초기화 로그 간소화
       
       // 기존 알림들의 uniqueKey 목록을 DB에서 조회 (최근 7일간)
       const existingUniqueKeys = await this.databaseManager.getExistingUniqueKeys(7);
       
-      console.log(`[DUPLICATE_INIT] 📋 Found ${existingUniqueKeys.length} existing notifications`);
+      // console.log(`[DUPLICATE_INIT] 📋 Found ${existingUniqueKeys.length} existing notifications`); // 알림 개수 로그 간소화
       
       // processedNotifications Set에 기존 uniqueKey들을 추가
       existingUniqueKeys.forEach(uniqueKey => {
         this.processedNotifications.add(uniqueKey);
       });
       
-      console.log(`[DUPLICATE_INIT] ✅ Duplicate check system initialized with ${this.processedNotifications.size} processed notifications`);
+      console.log(`✅ 중복 체크 시스템 초기화 완료: ${this.processedNotifications.size}개 처리됨`);
       
-      // 디버깅을 위한 일부 샘플 출력
-      const sampleKeys = Array.from(this.processedNotifications).slice(0, 5);
-      console.log(`[DUPLICATE_INIT] 📊 Sample processed keys:`, sampleKeys);
+      // 디버깅을 위한 일부 샘플 출력 제거
+      // const sampleKeys = Array.from(this.processedNotifications).slice(0, 5);
+      // console.log(`[DUPLICATE_INIT] 📊 Sample processed keys:`, sampleKeys);
       
     } catch (error) {
-      console.error(`[DUPLICATE_INIT] ❌ Failed to initialize duplicate check system:`, error);
+      console.error(`❌ 중복 체크 시스템 초기화 실패:`, error);
       // 오류가 발생해도 서비스는 계속 작동하도록 함
     }
   }
@@ -76,60 +76,60 @@ export class NotificationService {
    */
   private setupGlobalEventHandlers(): void {
     if (this.globalHandlersInitialized) {
-      console.log(`[DEBUG] Global handlers already initialized, skipping`);
+      // console.log(`[DEBUG] Global handlers already initialized, skipping`); // 핸들러 초기화 로그 간소화
       return;
     }
 
-    console.log(`[DEBUG] ===== SETTING UP GLOBAL NOTIFICATION HANDLERS =====`);
-    console.log(`[DEBUG] Platform: ${process.platform}`);
-    console.log(`[DEBUG] node-notifier version: ${require('node-notifier/package.json').version}`);
+    // console.log(`[DEBUG] ===== SETTING UP GLOBAL NOTIFICATION HANDLERS =====`); // 핸들러 설정 로그 간소화
+    // console.log(`[DEBUG] Platform: ${process.platform}`); // 플랫폼 정보 로그 간소화
+    // console.log(`[DEBUG] node-notifier version: ${require('node-notifier/package.json').version}`); // 버전 정보 로그 간소화
     
     try {
       // 글로벌 클릭 핸들러 - 한 번만 등록
       notifier.on('click', async (...args: any[]) => {
-        console.log(`[GLOBAL_CLICK] *** CLICK EVENT DETECTED ***`);
-        console.log(`[GLOBAL_CLICK] Arguments:`, args);
-        console.log(`[GLOBAL_CLICK] Active notifications count: ${this.activeNotifications.size}`);
+        // console.log(`[GLOBAL_CLICK] *** CLICK EVENT DETECTED ***`); // 클릭 이벤트 로그 간소화
+        // console.log(`[GLOBAL_CLICK] Arguments:`, args); // 클릭 인자 로그 간소화
+        // console.log(`[GLOBAL_CLICK] Active notifications count: ${this.activeNotifications.size}`); // 활성 알림 개수 로그 간소화
         await this.handleGlobalClick(...args);
       });
-      console.log(`[DEBUG] ✅ Click handler registered successfully`);
+      // console.log(`[DEBUG] ✅ Click handler registered successfully`); // 클릭 핸들러 등록 로그 간소화
 
       // 글로벌 액션 핸들러 - 한 번만 등록  
       notifier.on('action', async (...args: any[]) => {
-        console.log(`[GLOBAL_ACTION] *** ACTION EVENT DETECTED ***`);
-        console.log(`[GLOBAL_ACTION] Arguments:`, args);
+        // console.log(`[GLOBAL_ACTION] *** ACTION EVENT DETECTED ***`); // 액션 이벤트 로그 간소화
+        // console.log(`[GLOBAL_ACTION] Arguments:`, args); // 액션 인자 로그 간소화
         await this.handleGlobalAction(...args);
       });
-      console.log(`[DEBUG] ✅ Action handler registered successfully`);
+      // console.log(`[DEBUG] ✅ Action handler registered successfully`); // 액션 핸들러 등록 로그 간소화
 
-      // 기타 이벤트들 (완전한 디버깅)
+      // 기타 이벤트들 (로그 간소화)
       notifier.on('timeout', (...args: any[]) => {
-        console.log(`[GLOBAL_TIMEOUT] Timeout event:`, args);
+        // console.log(`[GLOBAL_TIMEOUT] Timeout event:`, args); // 타임아웃 이벤트 로그 간소화
       });
       
       notifier.on('close', (...args: any[]) => {
-        console.log(`[GLOBAL_CLOSE] Close event:`, args);
+        // console.log(`[GLOBAL_CLOSE] Close event:`, args); // 닫기 이벤트 로그 간소화
       });
       
       notifier.on('fail', (...args: any[]) => {
-        console.log(`[GLOBAL_FAIL] Fail event:`, args);
+        console.log(`❌ 알림 실패:`, args); // 실패 이벤트는 중요하므로 간단히 유지
       });
 
-      // 모든 이벤트 캐치 (디버깅용)
-      notifier.on('*', (...args: any[]) => {
-        console.log(`[GLOBAL_WILDCARD] Unknown event detected:`, args);
-      });
+      // 모든 이벤트 캐치 (디버깅용) - 제거
+      // notifier.on('*', (...args: any[]) => {
+      //   console.log(`[GLOBAL_WILDCARD] Unknown event detected:`, args);
+      // });
 
-      console.log(`[DEBUG] ✅ All handlers registered successfully`);
+      // console.log(`[DEBUG] ✅ All handlers registered successfully`); // 핸들러 등록 완료 로그 간소화
       
       this.globalHandlersInitialized = true;
       
-      // 핸들러 등록 확인을 위한 즉시 테스트
-      console.log(`[DEBUG] Testing handler registration...`);
-      console.log(`[DEBUG] notifier.listenerCount('click'): ${notifier.listenerCount('click')}`);
-      console.log(`[DEBUG] notifier.listenerCount('action'): ${notifier.listenerCount('action')}`);
+      // 핸들러 등록 확인을 위한 즉시 테스트 제거
+      // console.log(`[DEBUG] Testing handler registration...`);
+      // console.log(`[DEBUG] notifier.listenerCount('click'): ${notifier.listenerCount('click')}`);
+      // console.log(`[DEBUG] notifier.listenerCount('action'): ${notifier.listenerCount('action')}`); // 액션 리스너 개수 로그 간소화
       
-      console.log(`[DEBUG] ===== GLOBAL HANDLERS INITIALIZATION COMPLETE =====`);
+      // console.log(`[DEBUG] ===== GLOBAL HANDLERS INITIALIZATION COMPLETE =====`); // 핸들러 초기화 완료 로그 간소화
     } catch (error) {
       console.error(`[ERROR] Failed to setup global handlers:`, error);
       this.globalHandlersInitialized = false;
@@ -734,11 +734,11 @@ export class NotificationService {
                 // Electron 알림 표시 성공 검증
                 setTimeout(() => {
                   // 알림이 실제로 표시되었는지 확인하는 간접적 방법
-                  console.log(`[ELECTRON] ✅ Electron fallback notification show() called successfully`);
-                  console.log(`[ELECTRON] Title: "${safeElectronOptions.title}"`);
-                  console.log(`[ELECTRON] Body: "${safeElectronOptions.body}"`);
-                  console.log(`[ELECTRON] ⚠️ User must click notification to open URL - no automatic opening`);
-                  console.log(`[ELECTRON] 📊 Notification display status: LIKELY_SUCCESSFUL (show() completed without error)`);
+                  console.log(`✅ Electron 알림 전송 완료`);
+                  // console.log(`[ELECTRON] Title: "${safeElectronOptions.title}"`); // 알림 제목/본문 로그 간소화
+                  // console.log(`[ELECTRON] Body: "${safeElectronOptions.body}"`); // 알림 제목/본문 로그 간소화
+                  // console.log(`[ELECTRON] ⚠️ User must click notification to open URL - no automatic opening`); // 사용법 안내 로그 간소화
+                  // console.log(`[ELECTRON] 📊 Notification display status: LIKELY_SUCCESSFUL (show() completed without error)`); // 상태 상세 로그 간소화
                 }, 100);
                 
                 resolve(true);
@@ -1142,7 +1142,7 @@ export class NotificationService {
   }
 
   private extractWeverseId(url: string): string {
-    console.log(`[EXTRACT_ID] 🔍 Extracting Weverse ID from URL: ${url}`);
+    // ID 추출 로그 간소화 - 개별 URL 처리는 DEBUG 레벨
     
     // 위버스 Live URL 형식: /live/2-161749779 또는 /live/2-161749779?params
     const liveMatch = url.match(/\/live\/([^?#]+)/);

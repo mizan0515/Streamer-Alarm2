@@ -121,46 +121,46 @@ export class WeiverseMonitor {
    * @returns 추출된 ID 문자열
    */
   private extractWeverseId(url: string): string {
-    console.log(`[EXTRACT_ID] 🔍 Extracting Weverse ID from URL: ${url}`);
+    // ID 추출 로그 간소화 - 개별 URL 처리는 DEBUG 레벨
     
     // 위버스 Live URL 형식: /live/2-161749779 또는 /live/2-161749779?params
     const liveMatch = url.match(/\/live\/([^?#]+)/);
     if (liveMatch) {
-      console.log(`[EXTRACT_ID] ✅ Found Live ID: ${liveMatch[1]}`);
+      // console.log(`[EXTRACT_ID] ✅ Found Live ID: ${liveMatch[1]}`); // 상세 로그 제거
       return liveMatch[1];
     }
     
     // 위버스 일반 게시물 URL 형식: /artist/2-161749779 또는 /moment/2-161749779
     const postMatch = url.match(/\/(?:artist|moment|media)\/([^?#]+)/);
     if (postMatch) {
-      console.log(`[EXTRACT_ID] ✅ Found Post ID: ${postMatch[1]}`);
+      // console.log(`[EXTRACT_ID] ✅ Found Post ID: ${postMatch[1]}`); // 상세 로그 제거
       return postMatch[1];
     }
     
     // 위버스 아티스트 페이지 URL 형식: /artistname/live/2-161749779
     const artistLiveMatch = url.match(/\/[^/]+\/live\/([^?#]+)/);
     if (artistLiveMatch) {
-      console.log(`[EXTRACT_ID] ✅ Found Artist Live ID: ${artistLiveMatch[1]}`);
+      // console.log(`[EXTRACT_ID] ✅ Found Artist Live ID: ${artistLiveMatch[1]}`); // ID 추출 로그 간소화
       return artistLiveMatch[1];
     }
     
     // 위버스 아티스트 게시물 URL 형식: /artistname/artist/2-161749779
     const artistPostMatch = url.match(/\/[^/]+\/(?:artist|moment|media)\/([^?#]+)/);
     if (artistPostMatch) {
-      console.log(`[EXTRACT_ID] ✅ Found Artist Post ID: ${artistPostMatch[1]}`);
+      // console.log(`[EXTRACT_ID] ✅ Found Artist Post ID: ${artistPostMatch[1]}`); // ID 추출 로그 간소화
       return artistPostMatch[1];
     }
     
     // 기존 방식 (숫자만 추출) - 백워드 호환성
     const numericMatch = url.match(/\/(\d+)(?:[?#]|$)/);
     if (numericMatch) {
-      console.log(`[EXTRACT_ID] ✅ Found Numeric ID: ${numericMatch[1]}`);
+      // console.log(`[EXTRACT_ID] ✅ Found Numeric ID: ${numericMatch[1]}`); // ID 추출 로그 간소화
       return numericMatch[1];
     }
     
     // 모든 패턴이 실패하면 URL 해시 사용 (타임스탬프 대신)
     const urlHash = crypto.createHash('md5').update(url).digest('hex').substring(0, 8);
-    console.log(`[EXTRACT_ID] ⚠️ No ID pattern matched, using URL hash: ${urlHash}`);
+    // console.log(`[EXTRACT_ID] ⚠️ No ID pattern matched, using URL hash: ${urlHash}`); // 상세 로그 제거
     return urlHash;
   }
 
@@ -209,16 +209,15 @@ export class WeiverseMonitor {
 
   private async ensureBrowserInstalled(): Promise<void> {
     try {
-      console.log('🔍 Checking Playwright browser installation for Weverse...');
-      
+      // 브라우저 설치 확인 로그 간소화
       const browserPath = chromium.executablePath();
       
       if (browserPath && fs.existsSync(browserPath)) {
-        console.log('✅ Playwright Chromium already installed');
+        // console.log('✅ Playwright Chromium already installed'); // 브라우저 설치 로그 간소화
         return;
       }
       
-      console.log('📦 Playwright Chromium not found, attempting installation...');
+      console.log('📦 Playwright Chromium 설치 중...');
       
       let playwrightCliPath: string;
       
@@ -243,16 +242,16 @@ export class WeiverseMonitor {
       }
       
       if (fs.existsSync(playwrightCliPath)) {
-        console.log('Installing Chromium browser for Weverse...');
+        // console.log('Installing Chromium browser for Weverse...'); // 브라우저 설치 로그 간소화
         
         const electronNodePath = process.execPath;
         execSync(`"${electronNodePath}" "${playwrightCliPath}" install chromium`, {
           stdio: 'pipe',
           timeout: 120000
         });
-        console.log('✅ Playwright Chromium installed successfully');
+        console.log('✅ Playwright Chromium 설치 완료');
       } else {
-        console.warn('⚠️ Playwright CLI not found, browser may need manual installation');
+        console.warn('⚠️ Playwright CLI 없음 - 수동 설치 필요');
       }
     } catch (error: any) {
       console.error('❌ Failed to install Playwright browser:', error.message);
@@ -332,7 +331,7 @@ export class WeiverseMonitor {
       
       this.page.setDefaultTimeout(15000);
       
-      console.log('Weverse browser initialized with persistent context');
+      // console.log('Weverse browser initialized with persistent context'); // 브라우저 초기화 로그 간소화
       
       // 세션 복원 시도
       await this.attemptSessionRestore();
@@ -569,11 +568,19 @@ export class WeiverseMonitor {
       weverseLogger.debug('페이지 상태 분석', {
         isLoginPage: loginCheckResult.isLoginPage,
         isLoginPageTitle: loginCheckResult.isLoginPageTitle,
-        isOnMainSite: loginCheckResult.isOnMainSite,
-        bodyContentPreview: loginCheckResult.bodyContent
+        isOnMainSite: loginCheckResult.isOnMainSite
+        // bodyContent 로그 제거 - 내용이 너무 길어서 로그 가독성 저하
       });
       
-      console.log('🔍 위버스 로그인 상태 체크 결과:', loginCheckResult);
+      console.log('🔍 위버스 로그인 상태 체크 결과:', {
+        isLoggedIn: loginCheckResult.isLoggedIn,
+        hasAuthCookies: loginCheckResult.hasAuthCookies,
+        loginMethod: loginCheckResult.loginMethod,
+        cookieCount: loginCheckResult.cookieCount,
+        url: loginCheckResult.url,
+        pageTitle: loginCheckResult.pageTitle
+        // bodyContent 등 상세 내용은 로그에서 제외
+      });
       
       const isLoggedIn = loginCheckResult.isLoggedIn;
       
@@ -1789,9 +1796,7 @@ export class WeiverseMonitor {
         
         if (foundNotifications.length > 0) {
           console.log(`✅ 위버스 알림 파싱 성공: 총 ${foundNotifications.length}개 알림 발견`);
-          foundNotifications.forEach((notification, index) => {
-            console.log(`  ${index + 1}. ${notification.artistName}: ${notification.title.substring(0, 50)}...`);
-          });
+          // 개별 알림 상세 내용은 로그에서 제외 - 가독성 향상
         } else if (debug.totalNotifications > 0) {
           console.log(`ℹ️ 분석 결과: 총 ${debug.totalNotifications}개 알림이 있지만 활성 아티스트 알림은 ${debug.activeArtistNotifications}개입니다`);
         } else {
@@ -1928,13 +1933,13 @@ export class WeiverseMonitor {
           const sendResult = await this.notificationService.sendNotification(notificationData);
           
           if (sendResult) {
-            console.log(`📱 [위버스] ${notification.artistName}: "${notification.title}" 알림 전송 완료`);
+            console.log(`📱 [위버스] ${notification.artistName} 알림 전송 완료`);
             
             // 알림 전송 성공 시에만 lastNotificationId 업데이트
             await this.databaseManager.updateWeverseArtistLastNotification(notification.artistName, notification.id);
-            console.log(`🔄 [위버스] ${notification.artistName}의 lastNotificationId 업데이트: ${notification.id}`);
+            // console.log(`🔄 [위버스] ${notification.artistName}의 lastNotificationId 업데이트: ${notification.id}`); // ID 업데이트 로그 간소화
           } else {
-            console.error(`❌ [위버스] ${notification.artistName}: "${notification.title}" 알림 전송 실패`);
+            console.error(`❌ [위버스] ${notification.artistName} 알림 전송 실패`);
             
             // 중복 체크로 인한 전송 실패의 경우, lastNotificationId 업데이트
             // 이렇게 하면 같은 알림이 계속 감지되는 순환 참조 문제 해결
