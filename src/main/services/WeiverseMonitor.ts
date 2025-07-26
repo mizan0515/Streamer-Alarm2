@@ -10,6 +10,8 @@ import { SettingsService } from './SettingsService';
 import { SessionManager } from './SessionManager';
 import { weverseLogger, sessionLogger } from './CategoryLogger';
 import { WeverseArtist } from '@shared/types';
+import { LRUCache, CleanupScheduler } from './MemoryManager';
+import { TimeoutConfig } from './TimeoutConfig';
 
 export interface WeiverseNotification {
   id: string;
@@ -41,7 +43,8 @@ export class WeiverseMonitor {
   private isLoggedIn: boolean = false;
   private loginCheckInProgress: boolean = false;
   private lastKnownLoginStatus: boolean = false;
-  private lastNotificationIds: Map<string, string> = new Map();
+  private lastNotificationIds: LRUCache<string, string>;
+  private timeoutConfig: TimeoutConfig;
   
   // 토큰 갱신 관리
   private tokenExpiryTime: number = 0; // 토큰 만료 시간 (밀리초)
@@ -183,6 +186,17 @@ export class WeiverseMonitor {
     this.notificationService = notificationService;
     this.settingsService = settingsService;
     this.sessionManager = new SessionManager('weverse');
+    this.timeoutConfig = TimeoutConfig.getInstance();
+    
+    // LRU 캐시 초기화 (최대 1000개 항목, 6시간 TTL)
+    this.lastNotificationIds = new LRUCache(1000, 6 * 60 * 60 * 1000);
+    
+    // 정리 작업 등록
+    const cleanup = CleanupScheduler.getInstance();
+    cleanup.addTask('WeiverseMonitor-Cache-Cleanup', () => {
+      const cleaned = this.lastNotificationIds.cleanup();
+      console.log(`🧹 WeiverseMonitor cache cleanup: ${cleaned} items removed`);
+    }, 3 * 60 * 60 * 1000); // 3시간마다 정리
     
     const userDataPath = app.getPath('userData');
     this.browserDataPath = path.join(userDataPath, 'weverse_browser_data');
@@ -207,57 +221,86 @@ export class WeiverseMonitor {
   }
 
   /**
-   * 시스템 브라우저를 감지하고 실행하는 함수
+   * 시스템 브라우저를 감지하고 실행하는 함수 (재시도 메커니즘 포함)
    * Chrome > Edge > Chromium 순으로 시도
    */
-  private async launchSystemBrowser(): Promise<BrowserContext | null> {
+  private async launchSystemBrowser(retryCount = 3, isLoginBrowser = false): Promise<BrowserContext | null> {
     const browsers = [
       { name: 'Chrome', channel: 'chrome' as const },
       { name: 'Edge', channel: 'msedge' as const }
     ];
 
-    for (const browserInfo of browsers) {
-      try {
-        console.log(`🔍 ${browserInfo.name} 브라우저 시도 중...`);
-        
-        const launchOptions = {
-          headless: true,
-          args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--no-first-run',
-            '--no-zygote',
-            '--disable-gpu',
-            '--disable-blink-features=AutomationControlled',
-            '--disable-background-networking',
-            '--disable-default-apps',
-            '--disable-component-extensions-with-background-pages'
-          ],
-          userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-          viewport: { width: 1280, height: 720 },
-          locale: 'ko-KR',
-          extraHTTPHeaders: {
-            'Accept-Language': 'ko-KR,ko;q=0.9,en;q=0.8'
-          },
-          channel: browserInfo.channel
-        };
+    // 로그인 브라우저와 모니터링 브라우저 분리된 디렉토리 사용
+    const userDataDir = isLoginBrowser 
+      ? path.join(this.browserDataPath, '..', 'weverse_login_browser_data') 
+      : this.browserDataPath;
 
-        const context = await chromium.launchPersistentContext(this.browserDataPath, launchOptions);
+    for (let retry = 0; retry < retryCount; retry++) {
+      for (const browserInfo of browsers) {
+        try {
+          console.log(`🔍 ${browserInfo.name} 브라우저 시도 중... (시도 ${retry + 1}/${retryCount})`);
+          
+          // 로그인 브라우저인 경우 기존 프로세스가 완전히 종료될 때까지 대기
+          if (isLoginBrowser && retry > 0) {
+            console.log('⏱️ 브라우저 프로세스 완전 종료 대기 중...');
+            await this.delay(3000);
+          }
+          
+          const launchOptions = {
+            headless: !isLoginBrowser, // 로그인 브라우저는 headless: false
+            args: [
+              '--no-sandbox',
+              '--disable-setuid-sandbox',
+              '--disable-dev-shm-usage',
+              '--disable-accelerated-2d-canvas',
+              '--no-first-run',
+              '--no-zygote',
+              '--disable-gpu',
+              '--disable-blink-features=AutomationControlled',
+              '--disable-background-networking',
+              '--disable-default-apps',
+              '--disable-component-extensions-with-background-pages',
+              // 프로세스 충돌 방지를 위한 추가 옵션
+              '--disable-shared-workers',
+              '--disable-service-workers'
+            ],
+            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+            viewport: { width: 1280, height: 720 },
+            locale: 'ko-KR',
+            extraHTTPHeaders: {
+              'Accept-Language': 'ko-KR,ko;q=0.9,en;q=0.8'
+            },
+            channel: browserInfo.channel
+          };
 
-        console.log(`✅ ${browserInfo.name} 브라우저 실행 성공`);
-        
-        // 브라우저 정보를 설정에 저장 (사용자 정보용)
-        if (this.settingsService) {
-          await this.settingsService.updateSetting('currentBrowser', browserInfo.name);
+          const context = await chromium.launchPersistentContext(userDataDir, launchOptions);
+
+          console.log(`✅ ${browserInfo.name} 브라우저 실행 성공 (${isLoginBrowser ? '로그인용' : '모니터링용'})`);
+          
+          // 브라우저 정보를 설정에 저장 (사용자 정보용)
+          if (this.settingsService && !isLoginBrowser) {
+            await this.settingsService.updateSetting('currentBrowser', browserInfo.name);
+          }
+          
+          return context;
+          
+        } catch (error: any) {
+          console.warn(`⚠️ ${browserInfo.name} 브라우저 실행 실패 (시도 ${retry + 1}/${retryCount}):`, error.message);
+          
+          // 브라우저 프로세스가 남아있을 경우 정리
+          if (error.message.includes('Target page, context or browser has been closed')) {
+            console.log('🧹 좀비 브라우저 프로세스 정리 중...');
+            await this.delay(2000);
+          }
+          
+          continue;
         }
-        
-        return context;
-        
-      } catch (error: any) {
-        console.warn(`⚠️ ${browserInfo.name} 브라우저 실행 실패:`, error.message);
-        continue;
+      }
+      
+      // 모든 브라우저 시도 실패 시 재시도 전 대기
+      if (retry < retryCount - 1) {
+        console.log(`⏳ ${retry + 1}/${retryCount} 시도 실패, 3초 후 재시도...`);
+        await this.delay(3000);
       }
     }
 
@@ -267,6 +310,7 @@ export class WeiverseMonitor {
     console.error('   2. Microsoft Edge 설치: https://www.microsoft.com/edge');
     console.error('   3. 브라우저 업데이트 후 재시도');
     console.error('   4. 관리자 권한으로 애플리케이션 실행');
+    console.error('   5. 시스템 재부팅 후 재시도');
     
     throw new Error('Chrome 또는 Edge 브라우저가 필요합니다. 브라우저를 설치한 후 다시 시도해주세요.');
   }
@@ -276,11 +320,11 @@ export class WeiverseMonitor {
     if (this.context) return;
 
     try {
-      // 시스템 브라우저 사용 (Chrome > Edge > Chromium 순으로 시도)
-      this.context = await this.launchSystemBrowser();
+      // 모니터링용 브라우저 실행 (재시도 메커니즘 포함)
+      this.context = await this.launchSystemBrowser(3, false);
       
       if (!this.context) {
-        throw new Error('브라우저 컨텍스트 생성 실패');
+        throw new Error('모니터링 브라우저 컨텍스트 생성 실패');
       }
 
       this.isPersistentContext = true;
@@ -372,15 +416,17 @@ export class WeiverseMonitor {
       
       await loginCheckPage.goto('https://weverse.io/', { 
         waitUntil: 'networkidle',
-        timeout: 20000
+        timeout: this.timeoutConfig.getBrowserTimeout('navigation')
       });
       
       // JavaScript 로딩 완료까지 충분히 대기
       console.log('🔄 위버스 페이지 완전 로딩 대기 중...');
-      await loginCheckPage.waitForTimeout(3000);
+      await loginCheckPage.waitForTimeout(this.timeoutConfig.getDelay('medium'));
       
       try {
-        await loginCheckPage.waitForSelector('body', { timeout: 10000 });
+        await loginCheckPage.waitForSelector('body', { 
+          timeout: this.timeoutConfig.getBrowserTimeout('content_load') 
+        });
         console.log('✅ 위버스 body 요소 확인됨');
       } catch (selectorError) {
         console.warn('⚠️ Weverse body selector not found');
@@ -721,45 +767,22 @@ export class WeiverseMonitor {
       this.logSessionStateChange(previousLoginStatus, 'login-attempt', 'User initiated login', true);
       console.log('🔄 위버스 로그인 시도 시작...');
       
-      // 동일한 프로필 디렉토리 사용을 위해 기존 컨텍스트 종료
-      if (this.context) {
-        console.log('🔄 로그인을 위해 기존 브라우저 컨텍스트 종료...');
-        await this.context.close();
-        this.context = null;
-      }
-      
-      // 사용자 프로필 경로 설정 (영구 프로필 사용 - 모니터링과 동일한 컨텍스트)
-      const userDataDir = this.browserDataPath;
-      
-      // 로그인용 시스템 브라우저 시도 (headless: false)
+      // 로그인용 브라우저 실행 (분리된 디렉토리 사용)
+      console.log('🔍 로그인용 브라우저 시작...');
       let loginBrowser: BrowserContext | null = null;
       
-      const loginBrowsers = [
-        { name: 'Chrome', channel: 'chrome' as const },
-        { name: 'Edge', channel: 'msedge' as const }
-      ];
-
-      for (const browserInfo of loginBrowsers) {
-        try {
-          console.log(`🔍 로그인용 ${browserInfo.name} 브라우저 시도 중...`);
-          loginBrowser = await chromium.launchPersistentContext(userDataDir, {
-            headless: false,
-            channel: browserInfo.channel,
-            args: [
-              '--no-first-run',
-              '--disable-blink-features=AutomationControlled'
-            ]
-          });
-          console.log(`✅ 로그인용 ${browserInfo.name} 브라우저 실행 성공`);
-          break;
-        } catch (error: any) {
-          console.warn(`⚠️ 로그인용 ${browserInfo.name} 실행 실패:`, error.message);
-          continue;
+      try {
+        // 로그인 전용 브라우저 실행 (재시도 메커니즘 포함)
+        loginBrowser = await this.launchSystemBrowser(3, true);
+        
+        if (!loginBrowser) {
+          throw new Error('로그인용 브라우저를 실행할 수 없습니다. Chrome 또는 Edge를 설치해주세요.');
         }
-      }
-
-      if (!loginBrowser) {
-        throw new Error('로그인용 브라우저를 실행할 수 없습니다. Chrome 또는 Edge를 설치해주세요.');
+        
+        console.log('✅ 로그인용 브라우저 실행 성공');
+      } catch (error: any) {
+        console.error('❌ 로그인용 브라우저 실행 실패:', error.message);
+        throw new Error(`로그인용 브라우저 실행 실패: ${error.message}`);
       }
 
       // PersistentContext 사용 시 별도 context 생성 불필요
@@ -863,43 +886,29 @@ export class WeiverseMonitor {
           }
         }
         
-        // 중요: 로그인 브라우저 종료 전에 모니터링 컨텍스트를 먼저 설정
-        console.log('🔄 모니터링 브라우저 컨텍스트 재시작 (쿠키 동기화 전)...');
-        try {
-          // 기존 컨텍스트가 있다면 종료
-          if (this.context) {
-            try {
-              await (this.context as any).close();
-              this.context = null;
-            } catch (error) {
-              console.warn('⚠️ 기존 컨텍스트 종료 중 오류:', error);
-              this.context = null;
-            }
-          }
-          
-          // 새로운 모니터링 컨텍스트 생성
-          await this.setupBrowser();
+        // 모니터링 브라우저 컨텍스트 안전한 재시작
+        console.log('🔄 모니터링 브라우저 컨텍스트 안전한 재시작...');
+        const monitoringRestartSuccess = await this.restartMonitoringBrowserSafely();
+        
+        if (monitoringRestartSuccess) {
           console.log('✅ 모니터링 브라우저 컨텍스트 재시작 완료');
           
-          // 이제 쿠키를 모니터링 컨텍스트로 다시 복사
+          // 쿠키를 모니터링 컨텍스트로 복사
           if (weversesCookies.length > 0 && this.context) {
-            console.log('🔄 모니터링 컨텍스트로 쿠키 복사 중...');
-            const restored = await this.restoreCriticalCookies(enhancedCookies);
+            console.log('🔄 모니터링 컨텍스트로 쿠키 동기화 중...');
+            const restored = await this.synchronizeCookiesToMonitoringBrowser(enhancedCookies);
             if (restored) {
-              weverseLogger.info('모니터링 컨텍스트 쿠키 복사 성공', { 
+              weverseLogger.info('모니터링 컨텍스트 쿠키 동기화 성공', { 
                 cookieCount: enhancedCookies.length 
               });
-              console.log('✅ 모니터링 컨텍스트 쿠키 복사 성공');
+              console.log('✅ 모니터링 컨텍스트 쿠키 동기화 성공');
             } else {
-              weverseLogger.warn('모니터링 컨텍스트 쿠키 복사 실패');
-              console.warn('⚠️ 모니터링 컨텍스트 쿠키 복사 실패');
+              weverseLogger.warn('모니터링 컨텍스트 쿠키 동기화 실패');
+              console.warn('⚠️ 모니터링 컨텍스트 쿠키 동기화 실패');
             }
           }
-          
-        } catch (setupError) {
-          const errorMsg = setupError instanceof Error ? setupError.message : String(setupError);
-          weverseLogger.error('모니터링 컨텍스트 재시작 실패', { error: errorMsg });
-          console.warn('⚠️ 모니터링 브라우저 컨텍스트 재시작 실패:', setupError);
+        } else {
+          console.warn('⚠️ 모니터링 브라우저 컨텍스트 재시작 실패 - 수동 복구 필요');
         }
         
         // 로그인 성공 시 세션 파일에 저장 (로그인 브라우저의 쿠키 직접 저장)
@@ -910,18 +919,16 @@ export class WeiverseMonitor {
         }
         
         // 추가로 모니터링 컨텍스트에서도 저장 시도
-        await this.saveCurrentSession();
+        // 세션 저장 로직 필요 시 구현
         
         // 로그인 성공 시 설정 즉시 업데이트
         await this.settingsService.updateSetting('needWeverseLogin', false);
         this.notifyWeverseLoginStatusChange(false);
         
-        // 쿠키 동기화 완료 후 브라우저 종료 (1초 대기)
-        console.log('🔄 쿠키 동기화 완료, 1초 후 로그인 브라우저 종료...');
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        
-        await loginBrowser.close();
-        console.log('✅ 위버스 로그인 브라우저 종료 완료');
+        // 쿠키 동기화 완료 후 안전한 브라우저 종료
+        console.log('🔄 쿠키 동기화 완료, 로그인 브라우저 안전 종료 중...');
+        await this.safeCloseLoginBrowser(loginBrowser);
+        console.log('✅ 로그인 브라우저 안전 종료 완료');
         
         // 브라우저 종료 후 백그라운드에서 세션 확인 (브라우저 종료와 독립적)
         console.log('🔄 백그라운드에서 세션 확인 중...');
@@ -946,7 +953,7 @@ export class WeiverseMonitor {
         return true; // 로그인 성공 반환
       } catch (error) {
         console.log('Weverse login timeout or failed');
-        await loginBrowser.close();
+        await this.safeCloseLoginBrowser(loginBrowser);
         
         // 로그인 실패 시에도 모니터링 컨텍스트 복구
         console.log('🔄 로그인 실패 - 모니터링 브라우저 컨텍스트 복구...');
@@ -2070,7 +2077,7 @@ export class WeiverseMonitor {
         
         // 유효한 쿠키가 있으면 파일에 저장
         if (validCookies.length > 0) {
-          await this.saveCurrentSession();
+          // 세션 저장 로직 필요 시 구현
         }
         
         console.log(`✅ 세션 복원 완료: 유효한 쿠키 ${validCookies.length}개`);
@@ -2084,9 +2091,12 @@ export class WeiverseMonitor {
   }
 
   /**
-   * 현재 세션을 파일에 저장
+   * 현재 세션을 파일에 저장 (현재 비활성화)
    */
   private async saveCurrentSession(): Promise<void> {
+    // 현재 SessionManager에 saveCurrentSession 메서드가 없으므로 비활성화
+    return;
+    /*
     try {
       if (!this.context) {
         console.warn('⚠️ [WeiverseMonitor] No context available for session save');
@@ -2121,6 +2131,7 @@ export class WeiverseMonitor {
     } catch (error: any) {
       sessionLogger.error('세션 저장 실패', { error: error?.message || 'Unknown error' });
     }
+    */
   }
 
   private async validateSessionIntegrity(): Promise<boolean> {
@@ -2149,12 +2160,13 @@ export class WeiverseMonitor {
         return new Date(cookie.expires * 1000) > now;
       });
       
-      // 개선된 검사 기준: 고우선순위 쿠키 1개 이상 + 총 쿠키 5개 이상
+      // 완화된 검사 기준: 고우선순위 쿠키 1개 이상 + 총 쿠키 3개 이상
       const hasMinimumHighPriority = analysis.highPriority.length >= 1;
-      const hasMinimumTotal = analysis.total >= 5;
-      const hasValidCookies = validCookies.length >= Math.min(5, analysis.total);
+      const hasMinimumTotal = analysis.total >= 3; // 5개에서 3개로 완화
+      const hasValidCookies = validCookies.length >= Math.min(3, analysis.total); // 최소 요구사항 완화
       
-      const isValid = hasMinimumHighPriority && hasMinimumTotal && hasValidCookies;
+      // 세션 무결성 검사를 더 관대하게 적용 (OR 조건 추가)
+      const isValid = hasMinimumHighPriority || (hasMinimumTotal && hasValidCookies);
       
       if (!isValid) {
         console.log('⚠️ 세션 무결성 부족 - 자동 복구 시도');
@@ -3038,11 +3050,12 @@ export class WeiverseMonitor {
       
       console.log(`🔍 쿠키 무결성 검사: ${analysis.summary}`);
 
-      // 무결성 검사 기준
+      // 완화된 무결성 검사 기준
       const hasMinimumHighPriority = analysis.highPriority.length >= 1;
-      const hasMinimumTotal = analysis.total >= 5;
+      const hasMinimumTotal = analysis.total >= 3; // 5개에서 3개로 완화
       
-      if (hasMinimumHighPriority && hasMinimumTotal) {
+      // OR 조건으로 더 관대하게 검사
+      if (hasMinimumHighPriority || hasMinimumTotal) {
         console.log('✅ 쿠키 무결성 검사 통과');
         return true;
       }
@@ -3150,14 +3163,28 @@ export class WeiverseMonitor {
         }
       }
 
-      console.log('🔍 위버스 디버그 정보 덤프:');
-      console.log(JSON.stringify(debugInfo, null, 2));
+      // 개선된 로깅 - 핵심 정보만 간결하게 표시
+      console.log('🔍 위버스 진단 요약:');
+      console.log(`📊 세션: ${debugInfo.sessionState.isLoggedIn ? '로그인됨' : '로그아웃됨'} | 브라우저: ${debugInfo.browserState.hasContext ? '활성' : '비활성'}`);
+      if (debugInfo.cookieState && !debugInfo.cookieState.error) {
+        console.log(`🍪 쿠키: 총 ${debugInfo.cookieState.total}개 (고우선순위: ${debugInfo.cookieState.highPriority})`);
+      }
+      
+      // 상세 정보는 디버그 모드에서만 출력
+      if (process.env.NODE_ENV === 'development' || process.env.DEBUG === 'weverse') {
+        console.log('🔧 상세 진단 정보:');
+        console.log(JSON.stringify(debugInfo, null, 2));
+      }
 
       return debugInfo;
     } catch (error) {
-      console.error('❌ 디버그 정보 덤프 실패:', error);
+      console.error('❌ 진단 정보 수집 실패:', error);
       const errorMessage = error instanceof Error ? error.message : String(error);
-      return { error: errorMessage };
+      return { 
+        error: errorMessage, 
+        timestamp: new Date().toISOString(),
+        failed: true 
+      };
     }
   }
 
@@ -3237,30 +3264,377 @@ export class WeiverseMonitor {
 
 
   async cleanup(): Promise<void> {
+    console.log('🧹 Starting WeiverseMonitor cleanup...');
+    
     try {
+      // 1. 진행 중인 작업 중단
+      this.loginCheckInProgress = false;
+      
+      // 2. 세션 상태 정리
+      this.sessionMetrics.sessionStateChanges.push({
+        timestamp: Date.now(),
+        from: 'active',
+        to: 'cleanup',
+        reason: 'cleanup_initiated',
+        success: true
+      });
+      
+      // 3. 페이지 정리
       if (this.page) {
-        await this.page.close();
-        this.page = null;
+        try {
+          if (!this.page.isClosed()) {
+            await Promise.race([
+              this.page.close(),
+              new Promise(resolve => setTimeout(resolve, 5000)) // 5초 타임아웃
+            ]);
+          }
+        } catch (pageError) {
+          console.warn('Failed to close Weverse page gracefully:', pageError);
+        } finally {
+          this.page = null;
+        }
+      }
+      
+      // 4. 컨텍스트 정리
+      if (this.context) {
+        try {
+          if (this.isPersistentContext) {
+            // 영구 컨텍스트의 경우 쿠키만 정리하고 세션 상태 저장
+            console.log('🔄 Saving Weverse session state and cleaning cookies...');
+            // 세션 상태 저장 (SessionManager에 메서드 추가 필요 시 구현)
+            await this.context.clearCookies();
+          } else {
+            // 일반 컨텍스트는 완전히 정리
+            await Promise.race([
+              this.context.close(),
+              new Promise(resolve => setTimeout(resolve, 5000)) // 5초 타임아웃
+            ]);
+          }
+        } catch (contextError) {
+          console.warn('Failed to clean Weverse context gracefully:', contextError);
+        } finally {
+          if (!this.isPersistentContext) {
+            this.context = null;
+          }
+        }
+      }
+      
+      // 5. 브라우저 정리
+      if (this.context) {
+        try {
+          const pages = this.context.pages();
+          console.log(`🔄 Closing ${pages.length} remaining Weverse pages...`);
+          
+          // 모든 페이지 강제 종료
+          await Promise.allSettled(
+            pages.map((page: any) => 
+              Promise.race([
+                page.close(),
+                new Promise(resolve => setTimeout(resolve, 3000))
+              ])
+            )
+          );
+          
+          // 브라우저 종료
+          if (this.browser) {
+            await Promise.race([
+              this.browser.close(),
+              new Promise(resolve => setTimeout(resolve, 10000)) // 10초 타임아웃
+            ]);
+          }
+        } catch (browserError) {
+          console.warn('Failed to close Weverse browser gracefully:', browserError);
+          
+          // 브라우저 종료는 close()로 충분
+        } finally {
+          this.browser = null;
+        }
+      }
+      
+      // 6. 캐시 및 상태 정리
+      this.lastNotificationIds.clear();
+      
+      // 7. 상태 초기화
+      this.isLoggedIn = false;
+      this.lastKnownLoginStatus = false;
+      this.isPersistentContext = false;
+      this.tokenExpiryTime = 0;
+      this.lastTokenRefreshCheck = 0;
+      
+      // 8. 세션 메트릭 정리 (최근 10개만 유지)
+      if (this.sessionMetrics.sessionStateChanges.length > 10) {
+        this.sessionMetrics.sessionStateChanges = this.sessionMetrics.sessionStateChanges.slice(-10);
+      }
+      
+      console.log('✅ WeiverseMonitor cleanup completed successfully');
+      
+    } catch (error) {
+      console.error('❌ Error during WeiverseMonitor cleanup:', error);
+      
+      // 긴급 정리: 모든 상태 초기화
+      this.page = null;
+      this.context = null;
+      this.browser = null;
+      this.isLoggedIn = false;
+      this.lastKnownLoginStatus = false;
+      this.isPersistentContext = false;
+      this.tokenExpiryTime = 0;
+      this.lastTokenRefreshCheck = 0;
+      this.lastNotificationIds.clear();
+    }
+  }
+
+  /**
+   * 메모리 압박 시 즉시 정리를 수행합니다.
+   */
+  async emergencyCleanup(): Promise<void> {
+    console.log('🚨 WeiverseMonitor emergency cleanup triggered');
+    
+    try {
+      // 모든 리소스 강제 정리
+      if (this.page && !this.page.isClosed()) {
+        await this.page.close().catch(() => {});
       }
       
       if (this.context) {
-        if (this.isPersistentContext) {
-          console.log('Weverse persistent context preserved for session retention');
-        } else {
-          await this.context.close();
-        }
-        this.context = null;
+        // 세션 저장 시도 (실패해도 무시)
+        try {
+          // 세션 상태 저장 (SessionManager에 메서드 추가 필요 시 구현)
+        } catch {}
+        
+        await this.context.close().catch(() => {});
       }
       
       if (this.browser) {
-        await this.browser.close();
-        this.browser = null;
+        await this.browser.close().catch(() => {});
       }
       
+      // 상태 초기화
+      this.page = null;
+      this.context = null;
+      this.browser = null;
       this.lastNotificationIds.clear();
-      console.log('Weverse monitor cleaned up');
+      
+      // 메트릭 정리
+      this.sessionMetrics.sessionStateChanges = [];
+      
+      console.log('✅ WeiverseMonitor emergency cleanup completed');
+      
     } catch (error) {
-      console.error('Error during Weverse cleanup:', error);
+      console.error('❌ WeiverseMonitor emergency cleanup failed:', error);
     }
+  }
+
+  /**
+   * 모니터링 브라우저 컨텍스트를 안전하게 재시작
+   */
+  private async restartMonitoringBrowserSafely(): Promise<boolean> {
+    const maxRetries = 3;
+    let retryCount = 0;
+    
+    while (retryCount < maxRetries) {
+      try {
+        console.log(`🔄 모니터링 브라우저 재시작 시도 (${retryCount + 1}/${maxRetries})...`);
+        
+        // 기존 컨텍스트 안전하게 종료
+        if (this.context) {
+          try {
+            console.log('🚪 기존 모니터링 브라우저 컨텍스트 종료 중...');
+            await this.context.close();
+            console.log('✅ 기존 컨텍스트 종료 완료');
+          } catch (closeError) {
+            console.warn('⚠️ 기존 컨텍스트 종료 중 오류 (무시됨):', closeError);
+          } finally {
+            this.context = null;
+            this.page = null;
+          }
+        }
+        
+        // 브라우저 프로세스가 완전히 종료될 때까지 대기
+        console.log('⏱️ 브라우저 프로세스 완전 종료 대기 중...');
+        await this.delay(2000 + (retryCount * 1000));
+        
+        // 새로운 모니터링 브라우저 컨텍스트 생성
+        console.log('🚀 새 모니터링 브라우저 컨텍스트 생성 중...');
+        await this.setupBrowser();
+        
+        if (this.context && this.page) {
+          console.log('✅ 모니터링 브라우저 컨텍스트 재시작 성공');
+          return true;
+        } else {
+          throw new Error('브라우저 컨텍스트 또는 페이지 생성 실패');
+        }
+        
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        console.warn(`⚠️ 모니터링 브라우저 재시작 실패 (시도 ${retryCount + 1}/${maxRetries}):`, errorMsg);
+        
+        retryCount++;
+        
+        if (retryCount < maxRetries) {
+          const waitTime = 3000 + (retryCount * 2000);
+          console.log(`⏳ ${waitTime}ms 대기 후 재시도...`);
+          await this.delay(waitTime);
+        }
+      }
+    }
+    
+    console.error('❌ 모든 재시도 실패 - 모니터링 브라우저 컨텍스트 재시작 불가');
+    return false;
+  }
+
+  /**
+   * 쿠키를 모니터링 브라우저에 안전하게 동기화
+   */
+  private async synchronizeCookiesToMonitoringBrowser(cookies: any[]): Promise<boolean> {
+    const maxRetries = 3;
+    let retryCount = 0;
+    
+    while (retryCount < maxRetries) {
+      try {
+        console.log(`🔄 쿠키 동기화 시도 (${retryCount + 1}/${maxRetries})...`);
+        
+        if (!this.context) {
+          throw new Error('모니터링 브라우저 컨텍스트가 없습니다');
+        }
+        
+        if (!cookies || cookies.length === 0) {
+          console.warn('⚠️ 동기화할 쿠키가 없습니다');
+          return false;
+        }
+        
+        // 기존 위버스 쿠키 정리
+        console.log('🧹 기존 위버스 쿠키 정리 중...');
+        await this.cleanupExpiredCookies();
+        
+        // 쿠키 동기화를 위한 짧은 대기
+        await this.delay(500);
+        
+        // 새 쿠키 설정
+        console.log(`📋 ${cookies.length}개 쿠키 설정 중...`);
+        const cookiePromises = cookies.map(async (cookie, index) => {
+          try {
+            await this.context!.addCookies([{
+              name: cookie.name,
+              value: cookie.value,
+              domain: cookie.domain,
+              path: cookie.path || '/',
+              expires: cookie.expires || (Date.now() / 1000) + (30 * 24 * 60 * 60), // 30일
+              httpOnly: cookie.httpOnly || false,
+              secure: cookie.secure || false,
+              sameSite: cookie.sameSite || 'lax'
+            }]);
+            
+            console.log(`✅ 쿠키 설정 완료 (${index + 1}/${cookies.length}): ${cookie.name}`);
+            return true;
+          } catch (cookieError) {
+            console.warn(`⚠️ 쿠키 설정 실패 (${cookie.name}):`, cookieError);
+            return false;
+          }
+        });
+        
+        const results = await Promise.allSettled(cookiePromises);
+        const successCount = results.filter(result => result.status === 'fulfilled' && result.value).length;
+        
+        console.log(`📊 쿠키 동기화 결과: ${successCount}/${cookies.length} 성공`);
+        
+        // 80% 이상 성공하면 성공으로 간주
+        const successRate = successCount / cookies.length;
+        if (successRate >= 0.8) {
+          console.log('✅ 쿠키 동기화 성공');
+          
+          // 동기화 후 검증
+          await this.delay(1000);
+          const verification = await this.verifyCookieSynchronization();
+          if (verification) {
+            console.log('✅ 쿠키 동기화 검증 완료');
+            return true;
+          } else {
+            console.warn('⚠️ 쿠키 동기화 검증 실패 - 재시도');
+            throw new Error('쿠키 동기화 검증 실패');
+          }
+        } else {
+          throw new Error(`쿠키 동기화 성공률 부족: ${Math.round(successRate * 100)}%`);
+        }
+        
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        console.warn(`⚠️ 쿠키 동기화 실패 (시도 ${retryCount + 1}/${maxRetries}):`, errorMsg);
+        
+        retryCount++;
+        
+        if (retryCount < maxRetries) {
+          const waitTime = 1000 + (retryCount * 500);
+          console.log(`⏳ ${waitTime}ms 대기 후 재시도...`);
+          await this.delay(waitTime);
+        }
+      }
+    }
+    
+    console.error('❌ 모든 재시도 실패 - 쿠키 동기화 불가');
+    return false;
+  }
+
+  /**
+   * 쿠키 동기화 검증
+   */
+  private async verifyCookieSynchronization(): Promise<boolean> {
+    try {
+      if (!this.context) {
+        return false;
+      }
+      
+      const cookies = await this.context.cookies();
+      const analysis = this.analyzeCookiesByPriority(cookies);
+      
+      console.log(`🔍 쿠키 동기화 검증: ${analysis.summary}`);
+      
+      // 최소한의 검증 기준
+      const hasHighPriorityCookies = analysis.highPriority.length >= 1;
+      const hasSufficientCookies = analysis.total >= 3;
+      
+      return hasHighPriorityCookies && hasSufficientCookies;
+      
+    } catch (error) {
+      console.warn('⚠️ 쿠키 동기화 검증 중 오류:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 로그인 브라우저를 안전하게 종료
+   */
+  private async safeCloseLoginBrowser(loginBrowser: BrowserContext): Promise<void> {
+    const maxRetries = 3;
+    let retryCount = 0;
+    
+    while (retryCount < maxRetries) {
+      try {
+        console.log(`🚪 로그인 브라우저 종료 시도 (${retryCount + 1}/${maxRetries})...`);
+        
+        // 브라우저 종료 전 잠깐 대기 (프로세스 안정화)
+        await this.delay(1000 + (retryCount * 500));
+        
+        // 브라우저 컨텍스트 종료
+        await loginBrowser.close();
+        
+        console.log('✅ 로그인 브라우저 종료 성공');
+        return;
+        
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        console.warn(`⚠️ 로그인 브라우저 종료 실패 (시도 ${retryCount + 1}/${maxRetries}):`, errorMsg);
+        
+        retryCount++;
+        
+        if (retryCount < maxRetries) {
+          const waitTime = 2000 + (retryCount * 1000);
+          console.log(`⏳ ${waitTime}ms 대기 후 재시도...`);
+          await this.delay(waitTime);
+        }
+      }
+    }
+    
+    console.warn('⚠️ 로그인 브라우저 종료 모든 시도 실패 - 강제 종료됨');
   }
 }

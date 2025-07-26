@@ -6,6 +6,8 @@ import { DatabaseManager } from './DatabaseManager';
 import { NotificationService } from './NotificationService';
 import { SettingsService } from './SettingsService';
 import { StreamerData, CafePost } from '@shared/types';
+import { LRUCache, CleanupScheduler, MemoryMonitor } from './MemoryManager';
+import { TimeoutConfig } from './TimeoutConfig';
 
 export class CafeMonitor {
   private browser: Browser | null = null;
@@ -16,10 +18,11 @@ export class CafeMonitor {
   private notificationService: NotificationService;
   private settingsService: SettingsService;
   private browserDataPath: string;
-  private lastPostIds: Map<string, string> = new Map();
+  private lastPostIds: LRUCache<string, string>;
   private isLoggedIn: boolean = false;
   private loginCheckInProgress: boolean = false;
   private lastKnownLoginStatus: boolean = false;
+  private timeoutConfig: TimeoutConfig;
 
   // 카페 시간 파싱 함수
   private parseCafeDate(dateText: string): Date {
@@ -61,6 +64,17 @@ export class CafeMonitor {
     this.databaseManager = databaseManager;
     this.notificationService = notificationService;
     this.settingsService = settingsService;
+    this.timeoutConfig = TimeoutConfig.getInstance();
+    
+    // LRU 캐시 초기화 (최대 500개 항목, 4시간 TTL)
+    this.lastPostIds = new LRUCache(500, 4 * 60 * 60 * 1000);
+    
+    // 정리 작업 등록
+    const cleanup = CleanupScheduler.getInstance();
+    cleanup.addTask('CafeMonitor-Cache-Cleanup', () => {
+      const cleaned = this.lastPostIds.cleanup();
+      console.log(`🧹 CafeMonitor cache cleanup: ${cleaned} items removed`);
+    }, 2 * 60 * 60 * 1000); // 2시간마다 정리
     
     // 브라우저 데이터 경로 설정
     const userDataPath = app.getPath('userData');
@@ -185,12 +199,14 @@ export class CafeMonitor {
       // 더 안정적인 페이지 로드 설정
       await loginCheckPage.goto('https://www.naver.com', { 
         waitUntil: 'domcontentloaded',  // networkidle 대신 더 안정적인 옵션
-        timeout: 15000  // 타임아웃 단축
+        timeout: this.timeoutConfig.getBrowserTimeout('navigation')
       });
       
       // DOM 요소 대기 (더 관대한 타임아웃)
       try {
-        await loginCheckPage.waitForSelector('#account', { timeout: 8000 });
+        await loginCheckPage.waitForSelector('#account', { 
+          timeout: this.timeoutConfig.getBrowserTimeout('selector_wait') 
+        });
       } catch (selectorError) {
         console.warn('⚠️ #account selector not found, trying alternative method');
       }
@@ -275,10 +291,10 @@ export class CafeMonitor {
       // 네이버 메인 페이지로 이동
       await this.page!.goto('https://www.naver.com', { 
         waitUntil: 'domcontentloaded',
-        timeout: 30000
+        timeout: this.timeoutConfig.getBrowserTimeout('navigation')
       });
       
-      await this.page!.waitForTimeout(3000);
+      await this.page!.waitForTimeout(this.timeoutConfig.getDelay('medium'));
       
       // 로그아웃 버튼 찾기 및 클릭
       const logoutResult = await this.page!.evaluate(() => {
@@ -305,7 +321,7 @@ export class CafeMonitor {
         console.log(`로그아웃 버튼 클릭됨: ${logoutResult.selector}`);
         
         // 로그아웃 완료 대기
-        await this.page!.waitForTimeout(3000);
+        await this.page!.waitForTimeout(this.timeoutConfig.getDelay('medium'));
         
         // 쿠키 및 세션 정리
         if (this.context) {
@@ -405,7 +421,9 @@ export class CafeMonitor {
       
       // 로그인 상태 유지 체크박스 자동 선택
       try {
-        await loginPage.waitForSelector('#keep', { timeout: 5000 });
+        await loginPage.waitForSelector('#keep', { 
+          timeout: this.timeoutConfig.getBrowserTimeout('selector_fast') 
+        });
         
         // 체크박스가 체크되어 있지 않다면 라벨을 클릭하여 체크
         const isChecked = await loginPage.isChecked('#keep');
@@ -425,7 +443,9 @@ export class CafeMonitor {
       
       try {
         // 로그인 완료 감지 (리다이렉트 확인) - 5분에서 3분으로 단축
-        await loginPage.waitForURL('https://www.naver.com/', { timeout: 180000 });
+        await loginPage.waitForURL('https://www.naver.com/', { 
+          timeout: this.timeoutConfig.getBrowserTimeout('login_wait') 
+        });
         
         console.log('Login completed successfully');
         
@@ -448,7 +468,7 @@ export class CafeMonitor {
         await loginBrowser.close();
         
         // 약간의 딜레이 후 로그인 상태 재확인
-        await this.delay(2000);
+        await this.delay(this.timeoutConfig.getDelay('login_retry'));
         console.log('로그인 상태를 확인합니다...');
         const loginSuccess = await this.checkLoginStatus();
         
@@ -493,9 +513,18 @@ export class CafeMonitor {
       }
 
       const allPosts: CafePost[] = [];
-
+      let processedCount = 0;
+      const totalStreamers = activeStreamers.length;
+      
+      // 효율적인 순차 처리 (브라우저 기반이므로 병렬 처리 대신)
       for (const streamer of activeStreamers) {
         try {
+          processedCount++;
+          
+          if (!silentMode) {
+            console.log(`🔄 Processing cafe streamer ${processedCount}/${totalStreamers}: ${streamer.name}`);
+          }
+          
           const posts = await this.checkStreamerPosts(streamer, silentMode);
           
           if (posts.length > 0 && !silentMode) {
@@ -547,7 +576,25 @@ export class CafeMonitor {
           // 적응형 딜레이 (서버 부하 방지 및 법적 안전)
           await this.adaptiveDelay();
         } catch (error) {
-          console.error(`Failed to check ${streamer.name} posts:`, error);
+          console.error(`❌ Failed to check ${streamer.name} posts:`, error);
+          
+          // 에러 유형에 따른 적응적 처리
+          if (error instanceof Error) {
+            if (error.message.includes('timeout')) {
+              console.warn(`⏰ ${streamer.name}: Timeout detected, increasing delay for next streamer`);
+              await this.delay(this.timeoutConfig.getDelay('error_timeout')); // 타임아웃 시 추가 대기
+            } else if (error.message.includes('Navigation failed')) {
+              console.warn(`🌐 ${streamer.name}: Navigation failed, might be network issue`);
+              await this.delay(this.timeoutConfig.getDelay('error_network')); // 네비게이션 실패 시 추가 대기
+            } else if (error.message.includes('Page closed')) {
+              console.warn(`📄 ${streamer.name}: Page was closed, reinitializing browser context`);
+              try {
+                await this.setupBrowser(); // 페이지 종료 시 브라우저 재초기화
+              } catch (setupError) {
+                console.error('Failed to reinitialize browser:', setupError);
+              }
+            }
+          }
         }
       }
 
@@ -573,11 +620,16 @@ export class CafeMonitor {
       const cafeUrl = `https://cafe.naver.com/ca-fe/cafes/${streamer.cafeClubId}/members/${streamer.naverCafeUserId}`;
       console.log(`${streamer.name}: 카페 URL 접근 - ${cafeUrl}`);
       
-      await this.page.goto(cafeUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
+      await this.page.goto(cafeUrl, { 
+        waitUntil: 'domcontentloaded', 
+        timeout: this.timeoutConfig.getBrowserTimeout('navigation_fast') 
+      });
       
       // 최소 대기 - 테이블이 바로 로드되는지 확인
       try {
-        await this.page.waitForSelector('.article-board table tbody tr', { timeout: 5000 });
+        await this.page.waitForSelector('.article-board table tbody tr', { 
+          timeout: this.timeoutConfig.getBrowserTimeout('selector_fast') 
+        });
       } catch (selectorError) {
         console.log(`${streamer.name}: 게시물 목록을 찾을 수 없습니다.`);
         return [];
@@ -809,12 +861,38 @@ export class CafeMonitor {
 
   // 서버 부하 방지를 위한 적응형 딜레이
   private async adaptiveDelay(): Promise<void> {
-    // 기본 2초 + 랜덤 0-1초 (서버 부하 분산)
-    const baseDelay = 2000;
-    const randomDelay = Math.random() * 1000;
-    const totalDelay = baseDelay + randomDelay;
+    // 기본 딜레이 설정
+    let baseDelay = 2000; // 기본 2초
     
-    console.log(`Adaptive delay: ${Math.round(totalDelay)}ms`);
+    // 메모리 상황에 따른 딜레이 조정
+    try {
+      const memoryMonitor = MemoryMonitor.getInstance();
+      const usage = memoryMonitor.getCurrentUsage();
+      
+      if (usage.level === 'critical' || usage.level === 'emergency') {
+        baseDelay *= 2; // 메모리 부족 시 딜레이 2배
+        console.log(`🚨 High memory usage detected, increasing delay to ${baseDelay}ms`);
+      } else if (usage.level === 'warning') {
+        baseDelay *= 1.5; // 메모리 경고 시 딜레이 1.5배
+      }
+    } catch (error) {
+      // 메모리 모니터 오류 시 기본 딜레이 사용
+    }
+    
+    // 시간대별 딜레이 조정 (한국 시간 기준)
+    const now = new Date();
+    const hour = now.getHours();
+    
+    // 피크 시간대 (오후 6시-11시)에는 더 긴 딜레이
+    if (hour >= 18 && hour <= 23) {
+      baseDelay *= 1.3;
+    }
+    
+    // 랜덤 지터 추가 (서버 부하 분산)
+    const randomJitter = Math.random() * 1000;
+    const totalDelay = baseDelay + randomJitter;
+    
+    console.log(`⏰ Adaptive delay: ${Math.round(totalDelay)}ms (base: ${baseDelay}ms)`);
     await this.delay(totalDelay);
   }
 
@@ -1032,31 +1110,138 @@ export class CafeMonitor {
 
   // 정리 작업
   async cleanup(): Promise<void> {
+    console.log('🧹 Starting CafeMonitor cleanup...');
+    
     try {
+      // 1. 진행 중인 작업 중단
+      this.loginCheckInProgress = false;
+      
+      // 2. 페이지 정리
       if (this.page) {
-        await this.page.close();
-        this.page = null;
+        try {
+          // 페이지가 닫혀있지 않은 경우에만 정리
+          if (!this.page.isClosed()) {
+            await Promise.race([
+              this.page.close(),
+              new Promise(resolve => setTimeout(resolve, 5000)) // 5초 타임아웃
+            ]);
+          }
+        } catch (pageError) {
+          console.warn('Failed to close cafe page gracefully:', pageError);
+        } finally {
+          this.page = null;
+        }
+      }
+      
+      // 3. 컨텍스트 정리
+      if (this.context) {
+        try {
+          if (this.isPersistentContext) {
+            // 영구 컨텍스트의 경우 쿠키만 정리
+            console.log('🔄 Cleaning persistent context cookies...');
+            await this.context.clearCookies();
+          } else {
+            // 일반 컨텍스트는 완전히 정리
+            await Promise.race([
+              this.context.close(),
+              new Promise(resolve => setTimeout(resolve, 5000)) // 5초 타임아웃
+            ]);
+          }
+        } catch (contextError) {
+          console.warn('Failed to clean context gracefully:', contextError);
+        } finally {
+          if (!this.isPersistentContext) {
+            this.context = null;
+          }
+        }
+      }
+      
+      // 4. 브라우저 정리
+      if (this.context) {
+        try {
+          const pages = this.context.pages();
+          console.log(`🔄 Closing ${pages.length} remaining pages...`);
+          
+          // 모든 페이지 강제 종료
+          await Promise.allSettled(
+            pages.map((page: any) => 
+              Promise.race([
+                page.close(),
+                new Promise(resolve => setTimeout(resolve, 3000))
+              ])
+            )
+          );
+          
+          // 브라우저 종료
+          if (this.browser) {
+            await Promise.race([
+              this.browser.close(),
+              new Promise(resolve => setTimeout(resolve, 10000)) // 10초 타임아웃
+            ]);
+          }
+        } catch (browserError) {
+          console.warn('Failed to close browser gracefully:', browserError);
+          
+          // 브라우저 종료는 close()로 충분
+        } finally {
+          this.browser = null;
+        }
+      }
+      
+      // 5. 캐시 정리
+      this.lastPostIds.clear();
+      
+      // 6. 상태 초기화
+      this.isLoggedIn = false;
+      this.lastKnownLoginStatus = false;
+      this.isPersistentContext = false;
+      
+      console.log('✅ CafeMonitor cleanup completed successfully');
+      
+    } catch (error) {
+      console.error('❌ Error during CafeMonitor cleanup:', error);
+      
+      // 긴급 정리: 모든 상태 초기화
+      this.page = null;
+      this.context = null;
+      this.browser = null;
+      this.isLoggedIn = false;
+      this.lastKnownLoginStatus = false;
+      this.isPersistentContext = false;
+      this.lastPostIds.clear();
+    }
+  }
+
+  /**
+   * 메모리 압박 시 즉시 정리를 수행합니다.
+   */
+  async emergencyCleanup(): Promise<void> {
+    console.log('🚨 CafeMonitor emergency cleanup triggered');
+    
+    try {
+      // 모든 리소스 강제 정리
+      if (this.page && !this.page.isClosed()) {
+        await this.page.close().catch(() => {});
       }
       
       if (this.context) {
-        if (this.isPersistentContext) {
-          // 영구 컨텍스트는 닫지 않고 유지 (세션 보존)
-          console.log('Persistent context preserved for session retention');
-        } else {
-          await this.context.close();
-        }
-        this.context = null;
+        await this.context.close().catch(() => {});
       }
       
       if (this.browser) {
-        await this.browser.close();
-        this.browser = null;
+        await this.browser.close().catch(() => {});
       }
       
+      // 상태 초기화
+      this.page = null;
+      this.context = null;
+      this.browser = null;
       this.lastPostIds.clear();
-      console.log('Cafe monitor cleaned up');
+      
+      console.log('✅ CafeMonitor emergency cleanup completed');
+      
     } catch (error) {
-      console.error('Error during cleanup:', error);
+      console.error('❌ CafeMonitor emergency cleanup failed:', error);
     }
   }
 }

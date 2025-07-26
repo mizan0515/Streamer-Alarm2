@@ -2,6 +2,8 @@ import axios, { AxiosInstance } from 'axios';
 import { DatabaseManager } from './DatabaseManager';
 import { NotificationService } from './NotificationService';
 import { StreamerData, LiveStatus } from '@shared/types';
+import { LRUCache, MemoryMonitor, CleanupScheduler } from './MemoryManager';
+import { TimeoutConfig } from './TimeoutConfig';
 
 interface ChzzkLiveResponse {
   code: number;
@@ -48,17 +50,31 @@ export class ChzzkMonitor {
   private httpClient: AxiosInstance;
   private databaseManager: DatabaseManager;
   private notificationService: NotificationService;
-  private previousLiveStatus: Map<string, boolean> = new Map();
-  private previousLiveTitle: Map<string, string> = new Map();
+  private previousLiveStatus: LRUCache<string, boolean>;
+  private previousLiveTitle: LRUCache<string, string>;
   private monitoringService?: any; // MonitoringService 참조
+  private timeoutConfig: TimeoutConfig;
 
   constructor(databaseManager: DatabaseManager, notificationService: NotificationService) {
     this.databaseManager = databaseManager;
     this.notificationService = notificationService;
+    this.timeoutConfig = TimeoutConfig.getInstance();
+    
+    // LRU 캐시 초기화 (최대 500개 항목, 1시간 TTL)
+    this.previousLiveStatus = new LRUCache(500, 60 * 60 * 1000);
+    this.previousLiveTitle = new LRUCache(500, 60 * 60 * 1000);
+    
+    // 정리 작업 등록
+    const cleanup = CleanupScheduler.getInstance();
+    cleanup.addTask('ChzzkMonitor-Cache-Cleanup', () => {
+      const statusCleaned = this.previousLiveStatus.cleanup();
+      const titleCleaned = this.previousLiveTitle.cleanup();
+      console.log(`🧹 ChzzkMonitor cache cleanup: ${statusCleaned + titleCleaned} items removed`);
+    }, 30 * 60 * 1000); // 30분마다 정리
     
     // CHZZK API 클라이언트 설정
     this.httpClient = axios.create({
-      timeout: 10000,
+      timeout: this.timeoutConfig.getHttpTimeout('chzzk_api'),
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'application/json',

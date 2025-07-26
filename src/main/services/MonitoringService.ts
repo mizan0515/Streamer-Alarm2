@@ -6,6 +6,10 @@ import { TwitterMonitor } from './TwitterMonitor';
 import { CafeMonitor } from './CafeMonitor';
 import { WeiverseMonitor } from './WeiverseMonitor';
 import { LiveStatus, TwitterTweet, CafePost, WeverseNotification, WeverseArtist } from '@shared/types';
+import { MemoryMonitor, CleanupScheduler } from './MemoryManager';
+import { TimeoutConfig } from './TimeoutConfig';
+import { ErrorManager } from './ErrorManager';
+import { PerformanceMonitor } from './PerformanceMonitor';
 
 export class MonitoringService {
   private databaseManager: DatabaseManager;
@@ -32,10 +36,49 @@ export class MonitoringService {
   private statusCheckInProgress: boolean = false;
   private trayService: any = null;
 
+  // 메모리 관리
+  private memoryMonitor: MemoryMonitor;
+  private cleanupScheduler: CleanupScheduler;
+  
+  // 타임아웃 관리
+  private timeoutConfig: TimeoutConfig;
+  
+  // 에러 관리
+  private errorManager: ErrorManager;
+  
+  // 성능 모니터링
+  private performanceMonitor: PerformanceMonitor;
+
   constructor(databaseManager: DatabaseManager, notificationService: NotificationService) {
     this.databaseManager = databaseManager;
     this.notificationService = notificationService;
     this.settingsService = new SettingsService(databaseManager);
+    
+    // 메모리 관리자 초기화
+    this.memoryMonitor = MemoryMonitor.getInstance();
+    this.cleanupScheduler = CleanupScheduler.getInstance();
+    
+    // 타임아웃 관리자 초기화
+    this.timeoutConfig = TimeoutConfig.getInstance();
+    
+    // 에러 관리자 초기화
+    this.errorManager = ErrorManager.getInstance();
+    
+    // 성능 모니터 초기화
+    this.performanceMonitor = PerformanceMonitor.getInstance();
+    
+    // 메모리 경고 시 자동 정리 실행
+    this.memoryMonitor.onMemoryAlert((usage, level) => {
+      console.warn(`⚠️ Memory alert (${level}): ${Math.round(usage.rss / 1024 / 1024)}MB`);
+      
+      // 타임아웃 설정을 메모리 상태에 맞게 조정
+      this.timeoutConfig.updateMemoryPressure(level);
+      
+      if (level === 'critical' || level === 'emergency') {
+        console.log('🧹 Triggering emergency cleanup due to high memory usage');
+        this.performEmergencyCleanup();
+      }
+    });
     
     // 모니터링 서비스들 초기화
     this.chzzkMonitor = new ChzzkMonitor(databaseManager, notificationService);
@@ -57,6 +100,9 @@ export class MonitoringService {
       // 모니터링 상태 초기화 (중복 알림 방지를 위한 기준선 설정)
       await this.databaseManager.initializeMonitorStates();
       
+      // 건강도 체크 시작
+      this.startHealthCheck();
+      
       // 이전 상태 복원 (앱 재시작 시)
       await this.restoreMonitoringStates();
       
@@ -72,6 +118,10 @@ export class MonitoringService {
       // 네이버 로그인 상태 초기화 및 모니터링 시작
       await this.initializeLoginStatus();
       this.startLoginStatusMonitoring();
+      
+      // 메모리 모니터링 및 클린업 스케줄러 시작
+      this.memoryMonitor.startMonitoring(30000); // 30초마다 메모리 체크
+      this.cleanupScheduler.start();
       
       // 새 스트리머들의 기준선 설정 (무음 모드)
       await this.establishBaselinesForNewStreamers();
@@ -112,6 +162,10 @@ export class MonitoringService {
       
       // 로그인 상태 모니터링 중지
       this.stopLoginStatusMonitoring();
+      
+      // 메모리 모니터링 및 클린업 스케줄러 중지
+      this.memoryMonitor.stopMonitoring();
+      this.cleanupScheduler.stop();
       
       // 브라우저 정리
       await this.cafeMonitor.cleanup();
@@ -189,6 +243,9 @@ export class MonitoringService {
   }
 
   private async performMonitoringCheck(): Promise<void> {
+    const cycleStartTime = Date.now();
+    let cycleSuccessful = true;
+    
     try {
       const currentTime = Date.now();
       
@@ -232,44 +289,101 @@ export class MonitoringService {
       console.log(`Monitoring check completed. CHZZK Live: ${liveCount}, Tweets: ${tweets.length}, Posts: ${cafePosts.length}, Weverse: ${weverseNotifications.length}`);
       
     } catch (error) {
+      cycleSuccessful = false;
       console.error('Monitoring check failed:', error);
+    } finally {
+      // 모니터링 사이클 성능 기록
+      const cycleTime = Date.now() - cycleStartTime;
+      this.performanceMonitor.recordMonitoringCycle(cycleSuccessful, cycleTime);
+      
+      // 메모리 사용량 기록
+      const memoryUsage = this.getMemoryUsage();
+      this.performanceMonitor.recordMemoryUsage(memoryUsage);
     }
   }
 
   private async checkChzzkStreams(): Promise<LiveStatus[]> {
-    try {
-      return await this.chzzkMonitor.checkAllStreamers();
-    } catch (error) {
-      console.error('CHZZK monitoring failed:', error);
+    const startTime = Date.now();
+    
+    return await this.errorManager.executeWithRetry(
+      'ChzzkMonitor',
+      async () => {
+        return await this.chzzkMonitor.checkAllStreamers();
+      },
+      2 // CHZZK API는 빠른 응답이 중요하므로 최대 2회 재시도
+    ).then((result) => {
+      // 성공 시 응답 시간 기록
+      const responseTime = Date.now() - startTime;
+      this.performanceMonitor.recordServiceResponseTime('chzzk', responseTime);
+      return result;
+    }).catch((error) => {
+      // 실패 시에도 응답 시간 기록
+      const responseTime = Date.now() - startTime;
+      this.performanceMonitor.recordServiceResponseTime('chzzk', responseTime);
+      console.error('CHZZK monitoring failed after retries:', error);
       return [];
-    }
+    });
   }
 
   private async checkTwitterFeeds(): Promise<TwitterTweet[]> {
-    try {
-      return await this.twitterMonitor.checkAllStreamers();
-    } catch (error) {
-      console.error('Twitter monitoring failed:', error);
+    const startTime = Date.now();
+    
+    return await this.errorManager.executeWithRetry(
+      'TwitterMonitor',
+      async () => {
+        return await this.twitterMonitor.checkAllStreamers();
+      },
+      3 // Twitter는 Nitter 인스턴스 전환이 있어 재시도 여유
+    ).then((result) => {
+      const responseTime = Date.now() - startTime;
+      this.performanceMonitor.recordServiceResponseTime('twitter', responseTime);
+      return result;
+    }).catch((error) => {
+      const responseTime = Date.now() - startTime;
+      this.performanceMonitor.recordServiceResponseTime('twitter', responseTime);
+      console.error('Twitter monitoring failed after retries:', error);
       return [];
-    }
+    });
   }
 
   private async checkCafePosts(): Promise<CafePost[]> {
-    try {
-      return await this.cafeMonitor.checkAllStreamers();
-    } catch (error) {
-      console.error('Cafe monitoring failed:', error);
+    return await this.errorManager.executeWithRetry(
+      'CafeMonitor',
+      async () => {
+        return await this.cafeMonitor.checkAllStreamers();
+      },
+      2 // 브라우저 기반이므로 과도한 재시도는 부담
+    ).catch(async (error) => {
+      console.error('Cafe monitoring failed after retries:', error);
+      // 브라우저 문제일 가능성이 높으므로 재초기화 시도
+      try {
+        console.log('🔄 Attempting to reinitialize CafeMonitor browser...');
+        await this.cafeMonitor.initialize();
+      } catch (initError) {
+        console.error('Failed to reinitialize CafeMonitor:', initError);
+      }
       return [];
-    }
+    });
   }
 
   private async checkWeverseNotifications(): Promise<WeverseNotification[]> {
-    try {
-      return await this.weverseMonitor.checkAllStreamers();
-    } catch (error) {
-      console.error('Weverse monitoring failed:', error);
+    return await this.errorManager.executeWithRetry(
+      'WeiverseMonitor',
+      async () => {
+        return await this.weverseMonitor.checkAllStreamers();
+      },
+      2 // 브라우저 기반이므로 제한된 재시도
+    ).catch(async (error) => {
+      console.error('Weverse monitoring failed after retries:', error);
+      // 세션 문제일 가능성이 높으므로 재초기화 시도
+      try {
+        console.log('🔄 Attempting to reinitialize WeiverseMonitor session...');
+        await this.weverseMonitor.initialize();
+      } catch (initError) {
+        console.error('Failed to reinitialize WeiverseMonitor:', initError);
+      }
       return [];
-    }
+    });
   }
 
 
@@ -1118,5 +1232,205 @@ export class MonitoringService {
     } catch (error) {
       console.error('Failed to update live status immediately:', error);
     }
+  }
+
+  /**
+   * 메모리 부족 시 긴급 정리 작업을 수행합니다.
+   */
+  private async performEmergencyCleanup(): Promise<void> {
+    try {
+      console.log('🚨 Performing emergency cleanup...');
+
+      // 1. 모든 캐시 정리 강제 실행
+      this.chzzkMonitor.cleanup();
+      this.twitterMonitor.cleanup();
+      
+      // 2. 브라우저 기반 모니터 긴급 정리
+      try {
+        await Promise.allSettled([
+          this.cafeMonitor.emergencyCleanup(),
+          this.weverseMonitor.emergencyCleanup()
+        ]);
+      } catch (error) {
+        console.error('Emergency browser cleanup failed:', error);
+      }
+
+      // 3. 가비지 컬렉션 강제 실행
+      this.memoryMonitor.forceGarbageCollection();
+
+      // 4. 메모리 사용량 로깅
+      const usage = this.memoryMonitor.getCurrentUsage();
+      console.log(`🧹 Emergency cleanup completed. Memory usage: ${Math.round(usage.rss / 1024 / 1024)}MB (${usage.level})`);
+
+    } catch (error) {
+      console.error('Emergency cleanup failed:', error);
+    }
+  }
+
+  /**
+   * 현재 메모리 사용량 정보를 반환합니다.
+   */
+  getMemoryUsage(): NodeJS.MemoryUsage & { level: string } {
+    return this.memoryMonitor.getCurrentUsage();
+  }
+
+  /**
+   * 시스템 건강도를 확인하고 문제가 있으면 복구를 시도합니다.
+   */
+  private async performHealthCheck(): Promise<void> {
+    const systemHealth = this.errorManager.getSystemHealth();
+    
+    console.log(`🏥 System health check: ${systemHealth.overallHealth} (${systemHealth.healthyServices}/${systemHealth.totalServices} services healthy)`);
+    
+    if (systemHealth.overallHealth === 'critical') {
+      console.error('🚨 Critical system health detected!');
+      
+      // 위험 상황에서의 자동 복구 시도
+      await this.performSystemEmergencyRecovery();
+      
+      // 사용자에게 알림
+      if (this.trayService) {
+        this.trayService.updateStatus('모니터링 시스템에 문제가 발생했습니다.');
+      }
+    } else if (systemHealth.overallHealth === 'degraded') {
+      console.warn('⚠️ System performance degraded');
+      
+      // 성능 저하 시 가벼운 복구 작업
+      await this.performLightRecovery();
+    }
+    
+    // 추천사항이 있으면 로그에 출력
+    if (systemHealth.recommendations.length > 0) {
+      console.log('💡 System recommendations:');
+      systemHealth.recommendations.forEach((rec, index) => {
+        console.log(`   ${index + 1}. ${rec}`);
+      });
+    }
+  }
+
+  /**
+   * 위급 상황에서의 시스템 복구 작업을 수행합니다.
+   */
+  private async performSystemEmergencyRecovery(): Promise<void> {
+    console.log('🚑 Performing system emergency recovery...');
+    
+    try {
+      // 1. 메모리 정리
+      await this.performEmergencyCleanup();
+      
+      // 2. 브라우저 기반 모니터 재초기화
+      await Promise.allSettled([
+        this.cafeMonitor.initialize().catch(e => console.error('CafeMonitor recovery failed:', e)),
+        this.weverseMonitor.initialize().catch(e => console.error('WeiverseMonitor recovery failed:', e))
+      ]);
+      
+      // 3. 타임아웃 설정 리셋
+      this.timeoutConfig.reset();
+      
+      // 4. 5분 후에 건강도 재확인
+      setTimeout(() => {
+        this.performHealthCheck().catch(e => console.error('Health recheck failed:', e));
+      }, 5 * 60 * 1000);
+      
+      console.log('✅ System emergency recovery completed');
+    } catch (error) {
+      console.error('❌ System emergency recovery failed:', error);
+    }
+  }
+
+  /**
+   * 경미한 성능 저하 시의 복구 작업을 수행합니다.
+   */
+  private async performLightRecovery(): Promise<void> {
+    console.log('🔧 Performing light recovery...');
+    
+    try {
+      // 1. 캐시 정리
+      this.cleanupScheduler.runAllTasks();
+      
+      // 2. 에러율이 높은 서비스에 대해 타임아웃 조정 요청
+      const errorStats = this.errorManager.getErrorStats();
+      let hasHighErrorRate = false;
+      
+      for (const [errorType, stats] of Object.entries(errorStats)) {
+        const errorRate = this.errorManager.getErrorRate(errorType as any);
+        if (errorRate > 0.3) { // 30% 이상 에러율
+          hasHighErrorRate = true;
+          break;
+        }
+      }
+      
+      if (hasHighErrorRate) {
+        this.timeoutConfig.updateErrorRate(0.4); // 타임아웃 증가 요청
+      }
+      
+      console.log('✅ Light recovery completed');
+    } catch (error) {
+      console.error('❌ Light recovery failed:', error);
+    }
+  }
+
+  /**
+   * 정기적인 건강도 체크를 시작합니다.
+   */
+  startHealthCheck(): void {
+    // 30분마다 건강도 체크
+    setInterval(() => {
+      this.performHealthCheck().catch(e => console.error('Scheduled health check failed:', e));
+    }, 30 * 60 * 1000);
+    
+    console.log('🏥 Health check monitoring started (every 30 minutes)');
+  }
+
+  /**
+   * 에러 통계 정보를 가져옵니다.
+   */
+  getErrorStatistics() {
+    return {
+      systemHealth: this.errorManager.getSystemHealth(),
+      errorStats: this.errorManager.getErrorStats(),
+      serviceStatuses: this.errorManager.getAllServiceStatuses()
+    };
+  }
+
+  /**
+   * 에러 통계를 리셋합니다.
+   */
+  resetErrorStatistics(): void {
+    this.errorManager.resetStats();
+    console.log('📊 Error statistics have been reset');
+  }
+
+  /**
+   * 성능 보고서를 생성합니다.
+   */
+  generatePerformanceReport() {
+    return this.performanceMonitor.generatePerformanceReport();
+  }
+
+  /**
+   * 실시간 성능 대시보드 데이터를 가져옵니다.
+   */
+  getPerformanceDashboard() {
+    return this.performanceMonitor.getDashboardData();
+  }
+
+  /**
+   * 성능 메트릭을 리셋합니다.
+   */
+  resetPerformanceMetrics(): void {
+    this.performanceMonitor.resetMetrics();
+    console.log('📊 Performance metrics have been reset');
+  }
+
+  /**
+   * 종합 시스템 상태를 가져옵니다.
+   */
+  getSystemStatus() {
+    return {
+      performance: this.generatePerformanceReport(),
+      errors: this.getErrorStatistics(),
+      memory: this.getMemoryUsage()
+    };
   }
 }

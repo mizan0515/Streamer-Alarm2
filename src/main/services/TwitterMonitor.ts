@@ -3,6 +3,9 @@ import * as Parser from 'rss-parser';
 import { DatabaseManager } from './DatabaseManager';
 import { NotificationService } from './NotificationService';
 import { StreamerData, TwitterTweet } from '@shared/types';
+import { LRUCache, CleanupScheduler } from './MemoryManager';
+import { TimeoutConfig } from './TimeoutConfig';
+import { ErrorManager } from './ErrorManager';
 
 interface RSSItem {
   title?: string;
@@ -19,7 +22,9 @@ export class TwitterMonitor {
   private databaseManager: DatabaseManager;
   private notificationService: NotificationService;
   private settingsService: any; // SettingsService
-  private lastTweetIds: Map<string, string> = new Map();
+  private lastTweetIds: LRUCache<string, string>;
+  private timeoutConfig: TimeoutConfig;
+  private errorManager: ErrorManager;
 
   // Nitter 인스턴스 목록 (백업 지원)
   private nitterInstances = [
@@ -37,10 +42,22 @@ export class TwitterMonitor {
     this.databaseManager = databaseManager;
     this.notificationService = notificationService;
     this.settingsService = settingsService || null;
+    this.timeoutConfig = TimeoutConfig.getInstance();
+    this.errorManager = ErrorManager.getInstance();
     
-    // HTTP 클라이언트 설정
+    // LRU 캐시 초기화 (최대 1000개 항목, 2시간 TTL)
+    this.lastTweetIds = new LRUCache(1000, 2 * 60 * 60 * 1000);
+    
+    // 정리 작업 등록
+    const cleanup = CleanupScheduler.getInstance();
+    cleanup.addTask('TwitterMonitor-Cache-Cleanup', () => {
+      const cleaned = this.lastTweetIds.cleanup();
+      console.log(`🧹 TwitterMonitor cache cleanup: ${cleaned} items removed`);
+    }, 60 * 60 * 1000); // 1시간마다 정리
+    
+    // HTTP 클라이언트 설정 (동적 타임아웃 적용)
     this.httpClient = axios.create({
-      timeout: 15000,
+      timeout: this.timeoutConfig.getHttpTimeout('twitter_rss'),
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'application/rss+xml, application/xml, text/xml',
@@ -48,12 +65,12 @@ export class TwitterMonitor {
       }
     });
 
-    // RSS 파서 설정
+    // RSS 파서 설정 (동적 타임아웃 적용)
     this.rssParser = new Parser.default({
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
       },
-      timeout: 15000
+      timeout: this.timeoutConfig.getHttpTimeout('twitter_rss')
     });
   }
 
@@ -66,34 +83,110 @@ export class TwitterMonitor {
         console.log(`Checking ${activeStreamers.length} Twitter streamers...`);
       }
 
+      // 배치 크기 설정 (rate limit 대응으로 더 보수적으로)
+      const batchSize = 2; // 동시에 최대 2개 스트리머 체크 (rate limit 대응)
       const allTweets: TwitterTweet[] = [];
       
-      // 순차적으로 스트리머 체크 (Nitter 인스턴스 부하 분산)
-      for (const streamer of activeStreamers) {
+      // 배치별로 병렬 처리
+      for (let i = 0; i < activeStreamers.length; i += batchSize) {
+        const batch = activeStreamers.slice(i, i + batchSize);
+        console.log(`🔄 Processing Twitter batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(activeStreamers.length / batchSize)} (${batch.length} streamers)`);
+        
         try {
-          const tweets = await this.checkStreamerTweets(streamer);
-          allTweets.push(...tweets);
+          // 배치 내 스트리머들을 병렬 처리
+          const batchResults = await Promise.allSettled(
+            batch.map(async (streamer) => {
+              try {
+                const tweets = await this.checkStreamerTweets(streamer);
+                
+                // 새 트윗 알림 처리 (silent mode에서는 알림 비활성화)
+                if (!silentMode && tweets.length > 0) {
+                  await this.handleNewTweets(streamer, tweets);
+                }
+                
+                // 성공 시 에러 매니저에 기록
+                this.errorManager.recordSuccess('TwitterMonitor');
+                return { streamer: streamer.name, tweets, success: true };
+              } catch (error) {
+                this.errorManager.recordError('TwitterMonitor', error);
+                console.error(`Failed to check ${streamer.name} tweets:`, error);
+                return { streamer: streamer.name, tweets: [], success: false, error };
+              }
+            })
+          );
           
-          // 새 트윗 알림 처리 (silent mode에서는 알림 비활성화)
-          if (!silentMode) {
-            await this.handleNewTweets(streamer, tweets);
+          // 결과 수집 및 로깅
+          for (const result of batchResults) {
+            if (result.status === 'fulfilled') {
+              const { streamer, tweets, success } = result.value;
+              if (success) {
+                allTweets.push(...tweets);
+                if (tweets.length > 0) {
+                  console.log(`✅ ${streamer}: ${tweets.length} new tweets`);
+                }
+              } else {
+                console.warn(`⚠️ ${streamer}: check failed`);
+              }
+            } else {
+              console.error(`❌ Batch task failed:`, result.reason);
+            }
           }
           
-          // 요청 간 딜레이 (API 부하 방지)
-          await this.delay(1000);
+          // 배치 간 딜레이 (Nitter 인스턴스 부하 방지)
+          if (i + batchSize < activeStreamers.length) {
+            const delay = this.calculateBatchDelay(batchResults);
+            console.log(`⏳ Waiting ${delay}ms before next batch...`);
+            await this.delay(delay);
+          }
+          
         } catch (error) {
-          console.error(`Failed to check ${streamer.name} tweets:`, error);
+          console.error(`Failed to process Twitter batch ${Math.floor(i / batchSize) + 1}:`, error);
+          
+          // 배치 실패 시 순차 처리로 폴백
+          console.log('🔄 Falling back to sequential processing for this batch...');
+          for (const streamer of batch) {
+            try {
+              const tweets = await this.checkStreamerTweets(streamer);
+              allTweets.push(...tweets);
+              
+              if (!silentMode && tweets.length > 0) {
+                await this.handleNewTweets(streamer, tweets);
+              }
+              
+              await this.delay(this.timeoutConfig.getDelay('twitter_fallback')); // 폴백 시 더 긴 딜레이
+            } catch (streamerError) {
+              this.errorManager.recordError('TwitterMonitor-Fallback', streamerError);
+              console.error(`Failed to check ${streamer.name} tweets (fallback):`, streamerError);
+            }
+          }
         }
       }
 
       if (!silentMode) {
-        console.log(`Twitter check completed. New tweets: ${allTweets.length}`);
+        console.log(`✅ Twitter check completed. New tweets: ${allTweets.length}`);
       }
       
       return allTweets;
     } catch (error) {
       console.error('Failed to check Twitter streamers:', error);
       return [];
+    }
+  }
+
+  /**
+   * 배치 결과에 따라 적응적 딜레이를 계산합니다.
+   */
+  private calculateBatchDelay(results: PromiseSettledResult<any>[]): number {
+    const failedCount = results.filter(r => r.status === 'rejected' || !r.value?.success).length;
+    const baseDelay = this.timeoutConfig.getDelay('between_batches');
+    
+    // 실패율에 따라 딜레이 조정
+    if (failedCount === 0) {
+      return baseDelay; // 모든 요청 성공 시 기본 딜레이
+    } else if (failedCount <= results.length / 2) {
+      return baseDelay * 1.5; // 절반 이하 실패 시 1.5배
+    } else {
+      return baseDelay * 2; // 절반 이상 실패 시 2배
     }
   }
 
@@ -186,7 +279,12 @@ export class TwitterMonitor {
       const statusCode = error?.response?.status;
       
       if (statusCode && blockedCodes.includes(statusCode)) {
-        console.warn(`Instance ${this.nitterInstances[this.currentInstanceIndex]} appears to be blocked (${statusCode})`);
+        console.warn(`🚫 Instance ${this.nitterInstances[this.currentInstanceIndex]} rate limited/blocked (${statusCode})`);
+        
+        // rate limit 상황을 ErrorManager에 기록
+        if (statusCode === 429) {
+          this.errorManager.recordError('TwitterMonitor-RateLimit', error);
+        }
       }
       
       // 다른 Nitter 인스턴스로 재시도
@@ -195,8 +293,19 @@ export class TwitterMonitor {
         const newUrl = url.replace(/https:\/\/[^\/]+/, this.nitterInstances[this.currentInstanceIndex]);
         console.log(`Retrying with instance: ${this.nitterInstances[this.currentInstanceIndex]}`);
         
-        // 봇 차단된 경우 더 긴 대기 시간
-        const delay = (statusCode && blockedCodes.includes(statusCode)) ? 5000 : 2000;
+        // 상황별 대기 시간 설정
+        let delay: number;
+        if (statusCode === 429) {
+          // rate limit 특별 처리
+          delay = this.timeoutConfig.getDelay('error_rate_limit');
+          console.log(`⏳ Rate limit detected - waiting ${delay/1000}s before retry...`);
+        } else if (statusCode && blockedCodes.includes(statusCode)) {
+          // 기타 차단 상황
+          delay = this.timeoutConfig.getDelay('error_timeout');
+        } else {
+          // 일반 네트워크 에러
+          delay = this.timeoutConfig.getDelay('error_network');
+        }
         await this.delay(delay);
         return await this.fetchRSSFeed(newUrl, retryCount + 1);
       }
@@ -345,6 +454,7 @@ export class TwitterMonitor {
     try {
       return await this.checkStreamerTweets(streamer);
     } catch (error) {
+      this.errorManager.recordError('TwitterMonitor-Single', error);
       console.error(`Failed to check tweets for ${streamer.name}:`, error);
       return [];
     }
@@ -373,7 +483,9 @@ export class TwitterMonitor {
     for (let i = 0; i < this.nitterInstances.length; i++) {
       try {
         const testUrl = `${this.nitterInstances[i]}/elonmusk/rss`;
-        const response = await this.httpClient.get(testUrl, { timeout: 5000 });
+        const response = await this.httpClient.get(testUrl, { 
+          timeout: this.timeoutConfig.getHttpTimeout('default') 
+        });
         
         if (response.status === 200) {
           this.currentInstanceIndex = i;
