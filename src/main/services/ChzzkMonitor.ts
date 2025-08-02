@@ -148,6 +148,11 @@ export class ChzzkMonitor {
       }
 
       const content = liveResponse.data.content;
+      
+      // 프로필 이미지 업데이트 처리 (비동기로 수행) - channel이 있을 때만
+      if (content.channel?.channelImageUrl) {
+        this.updateStreamerProfileImageAsync(streamer, content.channel.channelImageUrl);
+      }
       const isLive = content.status === 'OPEN';
 
       if (isLive) {
@@ -174,6 +179,33 @@ export class ChzzkMonitor {
         streamerName: streamer.name,
         isLive: false
       };
+    }
+  }
+
+  /**
+   * 스트리머 프로필 이미지를 비동기로 업데이트
+   */
+  private async updateStreamerProfileImageAsync(streamer: StreamerData, newImageUrl: string): Promise<void> {
+    try {
+      // 이미 같은 URL이면 업데이트 스킵
+      if (streamer.profileImageUrl === newImageUrl) {
+        return;
+      }
+      
+      // 새로운 이미지 URL이 있으면 업데이트
+      if (newImageUrl && newImageUrl !== streamer.profileImageUrl) {
+        console.log(`프로필 이미지 업데이트: ${streamer.name} - ${newImageUrl}`);
+        
+        const updatedStreamer = { 
+          ...streamer, 
+          profileImageUrl: newImageUrl 
+        };
+        
+        await this.databaseManager.updateStreamer(updatedStreamer);
+        console.log(`✅ 프로필 이미지 업데이트 완료: ${streamer.name}`);
+      }
+    } catch (error) {
+      console.error(`프로필 이미지 업데이트 실패 (${streamer.name}):`, error);
     }
   }
 

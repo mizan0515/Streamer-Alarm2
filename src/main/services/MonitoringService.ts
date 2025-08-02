@@ -84,6 +84,8 @@ export class MonitoringService {
     this.chzzkMonitor = new ChzzkMonitor(databaseManager, notificationService);
     this.chzzkMonitor.setMonitoringService(this); // MonitoringService 참조 설정
     this.twitterMonitor = new TwitterMonitor(databaseManager, notificationService, this.settingsService);
+    // TwitterMonitor에 MonitoringService 참조 설정
+    this.twitterMonitor.setMonitoringService(this);
     this.cafeMonitor = new CafeMonitor(databaseManager, notificationService, this.settingsService);
     this.weverseMonitor = new WeiverseMonitor(databaseManager, notificationService, this.settingsService);
   }
@@ -331,6 +333,9 @@ export class MonitoringService {
     return await this.errorManager.executeWithRetry(
       'TwitterMonitor',
       async () => {
+        // Twitter 로그인 상태 동기화 (모니터링 전)
+        await this.twitterMonitor.syncLoginStatusWithUI();
+        
         return await this.twitterMonitor.checkAllStreamers();
       },
       3 // Twitter는 Nitter 인스턴스 전환이 있어 재시도 여유
@@ -889,7 +894,7 @@ export class MonitoringService {
 
   private notifyLoginStatusChange(needLogin: boolean): void {
     try {
-      console.log(`📢 Broadcasting login status: needLogin=${needLogin}`);
+      console.log(`📢 Broadcasting naver login status: needLogin=${needLogin}`);
       
       // 웹 인터페이스에 상태 변경 알림
       const { webContents } = require('electron');
@@ -909,7 +914,29 @@ export class MonitoringService {
       this.updateTrayMenuDirectly(needLogin);
       
     } catch (error) {
-      console.error('Failed to notify login status change:', error);
+      console.error('Failed to notify naver login status change:', error);
+    }
+  }
+
+  notifyTwitterLoginStatusChange(needLogin: boolean): void {
+    try {
+      console.log(`📢 Broadcasting twitter login status: needLogin=${needLogin}`);
+      
+      // 웹 인터페이스에 상태 변경 알림
+      const { webContents } = require('electron');
+      const allWebContents = webContents.getAllWebContents();
+      allWebContents.forEach((wc: any) => {
+        if (!wc.isDestroyed()) {
+          // 트위터 로그인 상태 변경 이벤트
+          wc.send('twitter-login-status-changed', { needLogin });
+          
+          // 설정 업데이트 이벤트도 함께 발송 (더 확실한 동기화)
+          this.sendTwitterSettingsUpdateEvent(needLogin, wc);
+        }
+      });
+      
+    } catch (error) {
+      console.error('Failed to notify twitter login status change:', error);
     }
   }
 
@@ -923,6 +950,7 @@ export class MonitoringService {
       const updatedSettings = {
         needNaverLogin: needNaverLogin,
         needWeverseLogin: this.settingsService.getNeedWeverseLogin(),
+        needTwitterLogin: this.settingsService.getSetting('needTwitterLogin') === 'true',
         checkInterval: this.settingsService.getCheckInterval(),
         autoStart: this.settingsService.getAutoStart(),
         minimizeToTray: this.settingsService.getMinimizeToTray(),
@@ -935,6 +963,28 @@ export class MonitoringService {
       wc.send('settings-updated', updatedSettings);
     } catch (error) {
       console.error('Failed to send settings update event:', error);
+    }
+  }
+
+  private sendTwitterSettingsUpdateEvent(needTwitterLogin: boolean, wc: any): void {
+    try {
+      // 현재 설정을 가져와서 트위터 로그인 상태만 업데이트
+      const updatedSettings = {
+        needNaverLogin: this.settingsService.getNeedNaverLogin(),
+        needWeverseLogin: this.settingsService.getNeedWeverseLogin(),
+        needTwitterLogin: needTwitterLogin,
+        checkInterval: this.settingsService.getCheckInterval(),
+        autoStart: this.settingsService.getAutoStart(),
+        minimizeToTray: this.settingsService.getMinimizeToTray(),
+        showDesktopNotifications: this.settingsService.getShowDesktopNotifications(),
+        cacheCleanupInterval: this.settingsService.getCacheCleanupInterval(),
+        theme: this.settingsService.getTheme()
+      };
+      
+      console.log(`📢 Sending settings update: needTwitterLogin=${needTwitterLogin}`);
+      wc.send('settings-updated', updatedSettings);
+    } catch (error) {
+      console.error('Failed to send twitter settings update event:', error);
     }
   }
 
@@ -1216,6 +1266,18 @@ export class MonitoringService {
       const artist = artists.find(a => a.artistName === artistName);
       
       if (artist) {
+        // 아티스트를 새로 활성화하는 경우 기준선 설정으로 기존 알림 무시
+        if (isEnabled && !artist.isEnabled) {
+          console.log(`🎯 ${artistName} 새로 활성화 - 기존 알림 무시를 위한 기준선 설정 시작`);
+          try {
+            await this.weverseMonitor.setBaselineForArtist(artistName);
+            console.log(`✅ ${artistName} 기준선 설정 완료 - 등록 후 새 알림만 받습니다`);
+          } catch (baselineError) {
+            console.error(`❌ ${artistName} 기준선 설정 실패:`, baselineError);
+            // 기준선 설정 실패해도 아티스트 활성화는 진행
+          }
+        }
+        
         await this.databaseManager.updateWeverseArtist(artist.id, { isEnabled });
       }
     } catch (error) {
@@ -1432,5 +1494,57 @@ export class MonitoringService {
       errors: this.getErrorStatistics(),
       memory: this.getMemoryUsage()
     };
+  }
+
+  // Twitter 관련 public 메서드들
+  async initiateTwitterLogin(): Promise<boolean> {
+    try {
+      console.log('🚨 Twitter login initiated by user');
+      
+      const result = await this.twitterMonitor.performLogin();
+      
+      if (result) {
+        console.log('✅ Twitter login completed');
+      } else {
+        console.log('❌ Twitter login failed');
+      }
+      
+      return result;
+    } catch (error) {
+      console.error('❌ Twitter login failed:', error);
+      return false;
+    }
+  }
+
+  async initiateTwitterLogout(): Promise<boolean> {
+    try {
+      console.log('🚨 Twitter logout initiated by user');
+      
+      await this.twitterMonitor.logout();
+      
+      console.log('✅ Twitter logout completed');
+      return true;
+    } catch (error) {
+      console.error('❌ Twitter logout failed:', error);
+      return false;
+    }
+  }
+
+  updateTwitterCredentials(username: string, password: string): void {
+    this.twitterMonitor.updateCredentials(username, password);
+  }
+
+  /**
+   * Get Twitter login status
+   */
+  getTwitterLoginStatus(): boolean {
+    return this.twitterMonitor.getLoginStatus();
+  }
+
+  /**
+   * Sync Twitter login status with UI
+   */
+  async syncTwitterLoginStatus(): Promise<void> {
+    await this.twitterMonitor.syncLoginStatusWithUI();
   }
 }

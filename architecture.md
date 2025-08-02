@@ -4,7 +4,7 @@
 
 ### 프로젝트 정보
 - **이름**: Streamer Alarm System
-- **버전**: 2.1.0
+- **버전**: 2.5.0
 - **설명**: 한국 VTuber 스트리머 모니터링 및 알림 시스템
 - **라이선스**: MIT
 - **개발 환경**: WSL2 (Windows Subsystem for Linux)
@@ -1298,4 +1298,4 @@ module.exports = {
 
 ---
 
-*이 문서는 Streamer Alarm System v2.1.0의 실제 구현을 기준으로 상세히 분석하여 작성되었습니다.*
+*이 문서는 Streamer Alarm System v2.5.0의 실제 구현을 기준으로 상세히 분석하여 작성되었습니다.*

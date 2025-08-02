@@ -88,17 +88,54 @@ export class DatabaseManager {
       await this.ensureUserDataDirectory();
       this.logSuccess('User data directory ensured');
       
-      // 데이터베이스 연결
-      this.db = new Database(this.dbPath);
-      this.logSuccess('Database connection established');
+      // 데이터베이스 연결 (강화된 에러 처리)
+      try {
+        this.db = new Database(this.dbPath);
+        this.logSuccess('Database connection established');
+        
+        // 데이터베이스 연결 테스트
+        const testResult = this.db.prepare('SELECT 1 as test').get() as { test: number } | undefined;
+        if (!testResult || testResult.test !== 1) {
+          throw new Error('Database connection test failed');
+        }
+        this.logSuccess('Database connection test passed');
+        
+      } catch (dbError) {
+        this.logError('Failed to create database connection', dbError);
+        
+        // 데이터베이스 파일이 손상된 경우 백업 후 재생성
+        if (dbExists) {
+          const backupPath = `${this.dbPath}.backup.${Date.now()}`;
+          this.logInfo(`Creating backup of corrupted database: ${backupPath}`);
+          try {
+            fs.copyFileSync(this.dbPath, backupPath);
+            fs.unlinkSync(this.dbPath);
+            this.logInfo('Corrupted database backed up and removed, attempting to recreate...');
+          } catch (backupError) {
+            this.logError('Failed to backup corrupted database', backupError);
+          }
+        }
+        
+        // 재시도
+        this.db = new Database(this.dbPath);
+        this.logSuccess('Database connection established (after recovery)');
+      }
       
       // WAL 모드 활성화 (성능 향상)
-      this.db.pragma('journal_mode = WAL');
-      this.logSuccess('WAL mode activated');
+      try {
+        this.db.pragma('journal_mode = WAL');
+        this.logSuccess('WAL mode activated');
+      } catch (walError) {
+        this.logError('Failed to activate WAL mode, continuing with default', walError);
+      }
       
       // 외래 키 제약 활성화
-      this.db.pragma('foreign_keys = ON');
-      this.logSuccess('Foreign keys enabled');
+      try {
+        this.db.pragma('foreign_keys = ON');
+        this.logSuccess('Foreign keys enabled');
+      } catch (fkError) {
+        this.logError('Failed to enable foreign keys, continuing', fkError);
+      }
       
       // 기본 테이블 생성
       this.createTables();
@@ -122,8 +159,20 @@ export class DatabaseManager {
       
       this.logSuccess('Database initialization completed successfully');
     } catch (error) {
-      this.logError('Database initialization failed', error);
-      throw error;
+      this.logError('Database initialization failed completely', error);
+      
+      // 최후의 수단: 메모리 데이터베이스로 폴백
+      try {
+        this.logInfo('Attempting fallback to in-memory database...');
+        this.db = new Database(':memory:');
+        this.createTables();
+        this.initializeSchemaVersion();
+        this.insertDefaultData();
+        this.logInfo('⚠️ Running with in-memory database - data will not persist!');
+      } catch (fallbackError) {
+        this.logError('Even fallback database failed', fallbackError);
+        throw new Error(`Critical database failure: ${(error as Error).message}. Fallback also failed: ${(fallbackError as Error).message}`);
+      }
     }
   }
 
@@ -894,41 +943,52 @@ export class DatabaseManager {
 
   // 스트리머 관련 메서드
   async getStreamers(): Promise<StreamerData[]> {
-    const stmt = this.db.prepare(`
-      SELECT s.*, 
-             GROUP_CONCAT(ns.platform || ':' || ns.enabled) as notification_settings
-      FROM streamers s
-      LEFT JOIN notification_settings ns ON s.id = ns.streamer_id
-      GROUP BY s.id
-      ORDER BY s.name
-    `);
+    // 데이터베이스 연결 확인
+    if (!this.db) {
+      this.logError('Database not initialized in getStreamers');
+      return [];
+    }
 
-    const rows = stmt.all() as any[];
+    try {
+      const stmt = this.db.prepare(`
+        SELECT s.*, 
+               GROUP_CONCAT(ns.platform || ':' || ns.enabled) as notification_settings
+        FROM streamers s
+        LEFT JOIN notification_settings ns ON s.id = ns.streamer_id
+        GROUP BY s.id
+        ORDER BY s.name
+      `);
+
+      const rows = stmt.all() as any[];
     
-    return rows.map(row => {
-      const notifications: any = { chzzk: true, cafe: true, twitter: true };
-      
-      if (row.notification_settings) {
-        row.notification_settings.split(',').forEach((setting: string) => {
-          const [platform, enabled] = setting.split(':');
-          notifications[platform] = enabled === '1';
-        });
-      }
+      return rows.map(row => {
+        const notifications: any = { chzzk: true, cafe: true, twitter: true };
+        
+        if (row.notification_settings) {
+          row.notification_settings.split(',').forEach((setting: string) => {
+            const [platform, enabled] = setting.split(':');
+            notifications[platform] = enabled === '1';
+          });
+        }
 
-      return {
-        id: row.id,
-        name: row.name,
-        chzzkId: row.chzzk_id,
-        twitterUsername: row.twitter_username,
-        naverCafeUserId: row.naver_cafe_user_id,
-        cafeClubId: row.cafe_club_id,
-        profileImageUrl: row.profile_image_url,
-        isActive: Boolean(row.is_active),
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-        notifications
-      };
-    });
+        return {
+          id: row.id,
+          name: row.name,
+          chzzkId: row.chzzk_id,
+          twitterUsername: row.twitter_username,
+          naverCafeUserId: row.naver_cafe_user_id,
+          cafeClubId: row.cafe_club_id,
+          profileImageUrl: row.profile_image_url,
+          isActive: Boolean(row.is_active),
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+          notifications
+        };
+      });
+    } catch (error) {
+      this.logError('Failed to get streamers', error);
+      return [];
+    }
   }
 
   async addStreamer(streamerData: Omit<StreamerData, 'id' | 'createdAt' | 'updatedAt'>): Promise<StreamerData> {
@@ -1484,6 +1544,12 @@ export class DatabaseManager {
   }
 
   async setSetting(key: string, value: string): Promise<void> {
+    // 데이터베이스 연결 확인
+    if (!this.db) {
+      this.logError('Database not initialized in setSetting');
+      throw new Error('Database not initialized');
+    }
+
     try {
       this.logInfo(`Setting '${key}' to '${value}'`);
       const stmt = this.db.prepare(`

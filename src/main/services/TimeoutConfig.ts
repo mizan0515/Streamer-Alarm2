@@ -8,20 +8,23 @@ export class TimeoutConfig {
   private config = {
     // HTTP 요청 타임아웃
     http: {
-      default: 10000,      // 기본 HTTP 요청 (10초)
-      chzzk_api: 8000,     // CHZZK API 요청 (8초)
-      twitter_rss: 20000,  // Twitter RSS 요청 (20초) - rate limit 대응
-      search: 10000        // 검색 요청 (10초)
+      default: 10000,        // 기본 HTTP 요청 (10초)
+      chzzk_api: 8000,       // CHZZK API 요청 (8초)
+      twitter_rss: 20000,    // Twitter RSS 요청 (20초) - rate limit 대응
+      twitter_page: 25000,   // Twitter 페이지 로드 (25초) - 증가
+      twitter_tweet_load: 15000, // Twitter 트윗 로드 (15초) - 증가
+      twitter_element: 12000, // Twitter 요소 대기 (12초) - 증가
+      search: 10000          // 검색 요청 (10초)
     },
     
     // 브라우저 작업 타임아웃
     browser: {
-      navigation: 15000,     // 페이지 네비게이션 (15초)
-      navigation_fast: 10000, // 빠른 네비게이션 (10초)
+      navigation: 25000,     // 페이지 네비게이션 (25초) - 증가
+      navigation_fast: 15000, // 빠른 네비게이션 (15초) - 증가
       login_wait: 180000,    // 로그인 대기 (3분)
-      selector_wait: 8000,   // 셀렉터 대기 (8초)
-      selector_fast: 5000,   // 빠른 셀렉터 대기 (5초)
-      content_load: 10000,   // 콘텐츠 로딩 (10초)
+      selector_wait: 12000,  // 셀렉터 대기 (12초) - 증가
+      selector_fast: 8000,   // 빠른 셀렉터 대기 (8초) - 증가
+      content_load: 15000,   // 콘텐츠 로딩 (15초) - 증가
       page_close: 5000,      // 페이지 종료 (5초)
       context_close: 5000,   // 컨텍스트 종료 (5초)
       browser_close: 10000   // 브라우저 종료 (10초)
@@ -86,7 +89,7 @@ export class TimeoutConfig {
   /**
    * HTTP 타임아웃 값을 가져옵니다.
    */
-  getHttpTimeout(type: 'default' | 'chzzk_api' | 'twitter_rss' | 'search' = 'default'): number {
+  getHttpTimeout(type: 'default' | 'chzzk_api' | 'twitter_rss' | 'twitter_page' | 'twitter_tweet_load' | 'twitter_element' | 'search' = 'default'): number {
     const baseTimeout = this.config.http[type];
     return Math.round(baseTimeout * this.getAdjustmentFactor());
   }

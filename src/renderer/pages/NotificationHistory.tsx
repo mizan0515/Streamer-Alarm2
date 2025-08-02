@@ -428,9 +428,17 @@ const NotificationHistory: React.FC<NotificationHistoryProps> = ({
     const [isVisible, setIsVisible] = useState(false);
     const [position, setPosition] = useState({ x: 0, y: 0 });
     const tooltipRef = useRef<HTMLDivElement>(null);
+    const containerRef = useRef<HTMLDivElement>(null);
+    const hideTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-    const handleMouseEnter = (e: React.MouseEvent) => {
+    const showTooltip = (e: React.MouseEvent) => {
       if (!notification.contentHtml) return;
+      
+      // 기존 hide timeout 취소
+      if (hideTimeoutRef.current) {
+        clearTimeout(hideTimeoutRef.current);
+        hideTimeoutRef.current = null;
+      }
       
       const rect = e.currentTarget.getBoundingClientRect();
       setPosition({
@@ -440,11 +448,36 @@ const NotificationHistory: React.FC<NotificationHistoryProps> = ({
       setIsVisible(true);
     };
 
-    const handleMouseLeave = () => {
+    const hideTooltip = () => {
+      // 지연된 숨김 처리
+      hideTimeoutRef.current = setTimeout(() => {
+        setIsVisible(false);
+      }, 200); // 200ms 지연으로 tooltip 영역으로 마우스 이동 시간 제공
+    };
+
+    const handleTooltipMouseEnter = () => {
+      // tooltip에 마우스가 들어가면 hide timeout 취소
+      if (hideTimeoutRef.current) {
+        clearTimeout(hideTimeoutRef.current);
+        hideTimeoutRef.current = null;
+      }
+    };
+
+    const handleTooltipMouseLeave = () => {
+      // tooltip에서 마우스가 나가면 즉시 숨김
       setIsVisible(false);
     };
 
-    // HTML 태그 제거 및 텍스트만 추출 (일부 태그는 유지)
+    // 컴포넌트 언마운트 시 timeout 정리
+    React.useEffect(() => {
+      return () => {
+        if (hideTimeoutRef.current) {
+          clearTimeout(hideTimeoutRef.current);
+        }
+      };
+    }, []);
+
+    // HTML 태그 정리 및 이미지 필터링 (미리보기용)
     const sanitizeHtml = (html: string) => {
       const tempDiv = document.createElement('div');
       tempDiv.innerHTML = html;
@@ -453,34 +486,57 @@ const NotificationHistory: React.FC<NotificationHistoryProps> = ({
       const links = tempDiv.querySelectorAll('a');
       links.forEach(link => {
         const linkText = link.textContent || link.href;
-        link.replaceWith(`🔗${linkText}`);
+        const textNode = document.createTextNode(`🔗${linkText}`);
+        link.replaceWith(textNode);
       });
       
-      // 이미지를 텍스트로 변환
+      // 이미지 필터링 - 트위터 알림의 경우 트위터 컨텐츠 이미지만 유지
       const images = tempDiv.querySelectorAll('img');
       images.forEach(img => {
-        const altText = img.alt || '이미지';
-        img.replaceWith(`🖼️[${altText}]`);
+        const src = img.getAttribute('src') || '';
+        
+        // 트위터 알림의 경우 프로필 이미지는 제거
+        if (notification.type === 'twitter' && src.includes('profile_images')) {
+          console.log('트위터 프로필 이미지 제거:', src);
+          img.remove();
+          return;
+        }
+        
+        // 트위터 알림의 경우 트위터 미디어 이미지만 유지
+        if (notification.type === 'twitter') {
+          // 트위터 미디어 이미지만 유지 (pbs.twimg.com 등)
+          if (src.includes('pbs.twimg.com') && !src.includes('profile_images')) {
+            img.style.maxWidth = '200px';
+            img.style.height = 'auto';
+            img.style.borderRadius = '6px';
+            img.style.margin = '8px 0';
+            img.style.display = 'block';
+          } else {
+            // 트위터 미디어가 아닌 이미지는 제거
+            img.remove();
+          }
+        } else {
+          // 다른 플랫폼의 경우 기존 로직 유지
+          img.style.maxWidth = '200px';
+          img.style.height = 'auto';
+          img.style.borderRadius = '6px';
+          img.style.margin = '8px 0';
+          img.style.display = 'block';
+        }
       });
       
-      // 줄바꿈 유지
-      const brs = tempDiv.querySelectorAll('br');
-      brs.forEach(br => br.replaceWith('\n'));
+      // 불필요한 태그 제거 (script, style 등)
+      const unwantedTags = tempDiv.querySelectorAll('script, style, noscript');
+      unwantedTags.forEach(tag => tag.remove());
       
-      // 단락 구분
-      const ps = tempDiv.querySelectorAll('p');
-      ps.forEach(p => {
-        const text = p.textContent || '';
-        p.replaceWith(text + '\n\n');
-      });
-      
-      return tempDiv.textContent || tempDiv.innerText || '';
+      return tempDiv.innerHTML;
     };
 
     return (
       <div 
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
+        ref={containerRef}
+        onMouseEnter={showTooltip}
+        onMouseLeave={hideTooltip}
         className="relative"
       >
         {children}
@@ -488,15 +544,17 @@ const NotificationHistory: React.FC<NotificationHistoryProps> = ({
         {isVisible && notification.contentHtml && (
           <div
             ref={tooltipRef}
-            className="fixed z-50 max-w-md p-4 bg-gray-900/95 backdrop-blur-sm border border-primary-500/30 rounded-xl shadow-2xl"
+            onMouseEnter={handleTooltipMouseEnter}
+            onMouseLeave={handleTooltipMouseLeave}
+            className="fixed z-50 max-w-md p-4 bg-gray-900/95 backdrop-blur-sm border border-primary-500/30 rounded-xl shadow-2xl cursor-auto"
             style={{
               left: position.x,
               top: position.y,
               transform: 'translateX(-50%) translateY(-100%)',
-              pointerEvents: 'none'
+              pointerEvents: 'auto' // 마우스 이벤트 활성화
             }}
           >
-            <div className="text-sm text-gray-300 max-h-48 overflow-y-auto custom-scrollbar">
+            <div className="text-sm text-gray-300 max-h-48 overflow-y-auto scrollbar-neon">
               <div className="flex items-center space-x-2 mb-3">
                 <div className="font-medium text-white">본문 미리보기</div>
                 <div className={`text-xs px-2 py-1 rounded ${getTypeColor(notification)} bg-opacity-20`}>
@@ -506,14 +564,25 @@ const NotificationHistory: React.FC<NotificationHistoryProps> = ({
                    notification.type === 'twitter' ? '트위터' : '기타'}
                 </div>
               </div>
-              <div className="whitespace-pre-wrap break-words leading-relaxed">
-                {(() => {
-                  const sanitized = sanitizeHtml(notification.contentHtml);
-                  return sanitized.length > 400 
-                    ? sanitized.substring(0, 400) + '\n\n...(더 보려면 클릭)'
-                    : sanitized;
-                })()}
-              </div>
+              <div 
+                className="whitespace-pre-wrap break-words leading-relaxed"
+                dangerouslySetInnerHTML={{
+                  __html: (() => {
+                    const sanitized = sanitizeHtml(notification.contentHtml);
+                    // HTML 길이가 너무 길면 자르기 (텍스트 기준이 아닌 DOM 노드 수 기준)
+                    const tempDiv = document.createElement('div');
+                    tempDiv.innerHTML = sanitized;
+                    
+                    if (tempDiv.textContent && tempDiv.textContent.length > 400) {
+                      // 텍스트가 너무 길면 자르고 안내 메시지 추가
+                      const truncatedText = tempDiv.textContent.substring(0, 400);
+                      return truncatedText + '\n\n...(더 보려면 클릭)';
+                    }
+                    
+                    return sanitized;
+                  })()
+                }}
+              />
             </div>
             {/* 글로우 효과 */}
             <div className="absolute inset-0 rounded-xl border border-primary-400/20 shadow-lg shadow-primary-500/10" />

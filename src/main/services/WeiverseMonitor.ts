@@ -2804,6 +2804,62 @@ export class WeiverseMonitor {
     }
   }
 
+  /**
+   * 특정 아티스트의 기준선을 설정하여 기존 알림을 무시하고 새 알림만 받도록 함
+   */
+  async setBaselineForArtist(artistName: string): Promise<void> {
+    try {
+      console.log(`🎯 [위버스 기준선] ${artistName} 기준선 설정 시작...`);
+      
+      // 1. 해당 아티스트가 활성화된 상태인지 확인
+      const artists = await this.databaseManager.getWeverseArtists();
+      const artist = artists.find(a => a.artistName === artistName);
+      
+      if (!artist) {
+        throw new Error(`아티스트를 찾을 수 없습니다: ${artistName}`);
+      }
+      
+      // 2. 위버스 세션 상태 확인
+      if (!await this.checkLoginStatus()) {
+        console.warn(`⚠️ [위버스 기준선] 위버스 로그인이 필요합니다. ${artistName} 기준선 설정을 건너뜁니다.`);
+        return;
+      }
+      
+      // 3. 해당 아티스트의 현재 최신 알림 조회
+      console.log(`🔍 [위버스 기준선] ${artistName}의 최신 알림 조회 중...`);
+      
+      const allNotifications = await this.checkNotifications(true); // silentMode = true
+      const artistNotifications = allNotifications.filter((n: WeiverseNotification) => n.artistName === artistName);
+      
+      if (artistNotifications.length > 0) {
+        // 최신 알림의 ID를 기준선으로 설정
+        const latestNotification = artistNotifications[0]; // 배열은 최신순으로 정렬됨
+        await this.databaseManager.updateWeverseArtistLastNotification(artistName, latestNotification.id);
+        
+        console.log(`✅ [위버스 기준선] ${artistName} 기준선 설정 완료: ${latestNotification.id}`);
+        console.log(`📊 [위버스 기준선] ${artistName}: ${artistNotifications.length}개의 기존 알림을 무시하도록 설정`);
+      } else {
+        // 알림이 없는 경우 현재 시간을 기준으로 더미 기준선 설정
+        const dummyId = `baseline_${Date.now()}_${artistName}`;
+        await this.databaseManager.updateWeverseArtistLastNotification(artistName, dummyId);
+        
+        console.log(`✅ [위버스 기준선] ${artistName} 더미 기준선 설정 완료: ${dummyId}`);
+        console.log(`📊 [위버스 기준선] ${artistName}: 현재 알림이 없어 더미 기준선 사용`);
+      }
+      
+      // 4. 메모리 캐시 업데이트 (다음 모니터링 사이클에서 즉시 적용)
+      if (artistNotifications.length > 0) {
+        const latestId = artistNotifications[0].id;
+        this.lastNotificationIds.set(artistName, latestId);
+        console.log(`🔄 [위버스 기준선] ${artistName} 메모리 캐시 업데이트 완료`);
+      }
+      
+    } catch (error) {
+      console.error(`❌ [위버스 기준선] ${artistName} 기준선 설정 실패:`, error);
+      throw error;
+    }
+  }
+
   private notifyWeverseLoginStatusChange(needLogin: boolean): void {
     try {
       console.log(`📢 [WeiverseMonitor] Broadcasting login status: needLogin=${needLogin}`);

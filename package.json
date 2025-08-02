@@ -1,7 +1,7 @@
 {
   "name": "streamer-alarm-system",
   "productName": "Streamer Alarm System",
-  "version": "2.1.0",
+  "version": "2.5.0",
   "description": "Korean VTuber streamer monitoring and notification system",
   "main": "dist/main.js",
   "homepage": "./",

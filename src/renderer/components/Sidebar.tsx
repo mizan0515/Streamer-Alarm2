@@ -12,6 +12,7 @@ interface SidebarProps {
 interface Settings {
   needNaverLogin?: boolean;
   needWeverseLogin?: boolean;
+  needTwitterLogin?: boolean;
   [key: string]: any;
 }
 
@@ -51,10 +52,17 @@ const Sidebar: React.FC<SidebarProps> = ({ stats, needWeverseLogin, onNaverActio
       setSettings(prev => prev ? { ...prev, needNaverLogin: data.needLogin } : null);
     };
 
+    // 트위터 로그인 상태 변경 이벤트 리스너 추가
+    const handleTwitterLoginStatusChange = (data: { needLogin: boolean }) => {
+      console.log('🔄 Sidebar: Twitter login status changed', data);
+      setSettings(prev => prev ? { ...prev, needTwitterLogin: data.needLogin } : null);
+    };
+
     // 이벤트 리스너 등록
     if (window.electronAPI?.on) {
       window.electronAPI.on('settings-updated', handleSettingsUpdate);
       window.electronAPI.on('naver-login-status-changed', handleNaverLoginStatusChange);
+      window.electronAPI.on('twitter-login-status-changed', handleTwitterLoginStatusChange);
     }
 
     // 컴포넌트 언마운트 시 리스너 해제
@@ -62,6 +70,7 @@ const Sidebar: React.FC<SidebarProps> = ({ stats, needWeverseLogin, onNaverActio
       if (window.electronAPI?.removeListener) {
         window.electronAPI.removeListener('settings-updated', handleSettingsUpdate);
         window.electronAPI.removeListener('naver-login-status-changed', handleNaverLoginStatusChange);
+        window.electronAPI.removeListener('twitter-login-status-changed', handleTwitterLoginStatusChange);
       }
     };
   }, []);
@@ -263,6 +272,18 @@ const Sidebar: React.FC<SidebarProps> = ({ stats, needWeverseLogin, onNaverActio
                   : 'bg-red-500/20 text-red-300 border border-red-500/30'
               }`}>
                 {!settings?.needNaverLogin ? '로그인됨' : '미로그인'}
+              </span>
+            </div>
+            
+            {/* 트위터 로그인 상태 */}
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-gray-400">트위터</span>
+              <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                !settings?.needTwitterLogin 
+                  ? 'bg-green-500/20 text-green-300 border border-green-500/30' 
+                  : 'bg-red-500/20 text-red-300 border border-red-500/30'
+              }`}>
+                {!settings?.needTwitterLogin ? '로그인됨' : '미로그인'}
               </span>
             </div>
             

@@ -27,12 +27,14 @@ const App: React.FC = () => {
   const [isNaverActionLoading, setIsNaverActionLoading] = useState(false);
   const [isWeverseLoginLoading, setIsWeverseLoginLoading] = useState(false);
   const [isWeverseRefreshLoading, setIsWeverseRefreshLoading] = useState(false);
+  const [isTwitterActionLoading, setIsTwitterActionLoading] = useState(false);
   const [weverseAction, setWeverseAction] = useState<'login' | 'logout' | null>(null);
+  const [twitterAction, setTwitterAction] = useState<'login' | 'logout' | 'configure' | null>(null);
 
   // 오버레이 상태 디버깅
   useEffect(() => {
-    console.log('🔍 Overlay state changed - isWeverseLoginLoading:', isWeverseLoginLoading, 'isNaverActionLoading:', isNaverActionLoading);
-  }, [isWeverseLoginLoading, isNaverActionLoading]);
+    console.log('🔍 Overlay state changed - isWeverseLoginLoading:', isWeverseLoginLoading, 'isNaverActionLoading:', isNaverActionLoading, 'isTwitterActionLoading:', isTwitterActionLoading);
+  }, [isWeverseLoginLoading, isNaverActionLoading, isTwitterActionLoading]);
 
   useEffect(() => {
     initializeApp();
@@ -148,11 +150,9 @@ const App: React.FC = () => {
         console.log('🔐 Received Weverse login status change:', data);
         setNeedWeverseLogin(data.needLogin);
         
-        // 로그인 완료 시 오버레이 해제
+        // 로그인 완료 시 아티스트 목록 새로고침 (오버레이는 핸들러에서 관리)
         if (!data.needLogin) {
-          console.log('🔐 Login completed - hiding overlay');
-          setIsWeverseLoginLoading(false);
-          setWeverseAction(null);
+          console.log('🔐 Login completed - refreshing artists');
           
           // 아티스트 목록도 새로고침
           window.electronAPI.getWeverseArtists().then(artists => {
@@ -161,10 +161,8 @@ const App: React.FC = () => {
             console.error('Failed to refresh artists after login:', error);
           });
         } else {
-          // 로그아웃 시 아티스트 목록 초기화
-          console.log('🚪 Logout completed - hiding overlay');
-          setIsWeverseLoginLoading(false);
-          setWeverseAction(null);
+          // 로그아웃 시 아티스트 목록 초기화 (오버레이는 핸들러에서 관리)
+          console.log('🚪 Logout completed - clearing artists');
           setWeverseArtists([]);
         }
       });
@@ -363,8 +361,9 @@ const App: React.FC = () => {
     } catch (error) {
       console.error('❌ Failed to login to Weverse:', error);
       alert('위버스 로그인에 실패했습니다: ' + (error instanceof Error ? error.message : String(error)));
-      // 오류 시에만 오버레이 해제
-      console.log('🔐 Login failed - hiding overlay');
+    } finally {
+      // 성공/실패 관계없이 오버레이 해제
+      console.log('🔐 Weverse login process finished - hiding overlay');
       setIsWeverseLoginLoading(false);
       setWeverseAction(null);
     }
@@ -392,8 +391,9 @@ const App: React.FC = () => {
     } catch (error) {
       console.error('❌ Failed to logout from Weverse:', error);
       alert('위버스 로그아웃에 실패했습니다: ' + (error instanceof Error ? error.message : String(error)));
-      // 오류 시에만 오버레이 해제
-      console.log('🚪 Logout failed - hiding overlay');
+    } finally {
+      // 성공/실패 관계없이 오버레이 해제
+      console.log('🚪 Weverse logout process finished - hiding overlay');
       setIsWeverseLoginLoading(false);
       setWeverseAction(null);
     }
@@ -493,6 +493,27 @@ const App: React.FC = () => {
         </div>
       )}
       
+      {/* 트위터 로그인/로그아웃 로딩 오버레이 */}
+      {isTwitterActionLoading && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center">
+          <div className="glass-card p-8 text-center animate-glow">
+            <div className="spinner spinner-lg mb-6"></div>
+            <h2 className="text-xl font-bold text-white neon-text mb-2">
+              {twitterAction === 'login' && '트위터 로그인 중'}
+              {twitterAction === 'logout' && '트위터 로그아웃 중'}
+              {twitterAction === 'configure' && '트위터 설정 중'}
+              {!twitterAction && '트위터 계정 처리 중'}
+            </h2>
+            <p className="text-gray-400">
+              {twitterAction === 'login' && '브라우저에서 트위터 로그인을 완료해주세요...'}
+              {twitterAction === 'logout' && '트위터에서 로그아웃하는 중입니다...'}
+              {twitterAction === 'configure' && '트위터 계정 설정을 구성하는 중입니다...'}
+              {!twitterAction && '잠시만 기다려주세요...'}
+            </p>
+          </div>
+        </div>
+      )}
+      
       <Sidebar 
         stats={stats} 
         needWeverseLogin={needWeverseLogin}
@@ -561,6 +582,14 @@ const App: React.FC = () => {
                   onWeverseActionEnd={() => {
                     setIsWeverseLoginLoading(false);
                     setWeverseAction(null);
+                  }}
+                  onTwitterActionStart={(action) => {
+                    setIsTwitterActionLoading(true);
+                    setTwitterAction(action);
+                  }}
+                  onTwitterActionEnd={() => {
+                    setIsTwitterActionLoading(false);
+                    setTwitterAction(null);
                   }}
                 />
               </div>

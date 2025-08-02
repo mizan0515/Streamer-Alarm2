@@ -69,6 +69,8 @@ export class SettingsService {
       theme: settings.theme || 'dark',
       needNaverLogin: settings.needNaverLogin === 'true',
       needWeverseLogin: settings.needWeverseLogin === 'true',
+      needTwitterLogin: settings.needTwitterLogin === 'true',
+      twitterCredentials: this.parseJsonSetting(settings.twitterCredentials),
       newStreamerFilterHours: parseInt(settings.newStreamerFilterHours || '24')
     };
   }
@@ -112,6 +114,8 @@ export class SettingsService {
       theme: 'dark',
       needNaverLogin: 'true',
       needWeverseLogin: 'true',
+      needTwitterLogin: 'true',
+      twitterCredentials: '{}', // 빈 JSON 객체
       newStreamerFilterHours: '24', // 새 스트리머 과거 알림 필터링 시간 (기본 24시간)
       currentBrowser: 'Chrome', // 기본 브라우저 (Weverse용)
       currentCafeBrowser: 'Chrome' // 기본 브라우저 (Cafe용)
@@ -151,6 +155,19 @@ export class SettingsService {
 
   getNeedWeverseLogin(): boolean {
     return this.getSetting('needWeverseLogin') === 'true';
+  }
+
+  getNeedTwitterLogin(): boolean {
+    return this.getSetting('needTwitterLogin') === 'true';
+  }
+
+  private parseJsonSetting(jsonString: string): any {
+    try {
+      return jsonString ? JSON.parse(jsonString) : {};
+    } catch (error) {
+      console.error('Failed to parse JSON setting:', error);
+      return {};
+    }
   }
 
   /**

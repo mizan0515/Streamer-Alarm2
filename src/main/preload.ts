@@ -33,6 +33,12 @@ const electronAPI = {
   naverLogin: () => ipcRenderer.invoke('naver-login'),
   naverLogout: () => ipcRenderer.invoke('naver-logout'),
   
+  // 트위터 로그인/로그아웃 및 자격증명 관리
+  twitterLogin: () => ipcRenderer.invoke('twitter-login'),
+  twitterLogout: () => ipcRenderer.invoke('twitter-logout'),
+  updateTwitterCredentials: (username: string, password: string) => ipcRenderer.invoke('update-twitter-credentials', { username, password }),
+  syncTwitterLoginStatus: () => ipcRenderer.invoke('sync-twitter-login-status'),
+  
   // 위버스 로그인/로그아웃 및 아티스트 관리
   weverseLogin: () => ipcRenderer.invoke('weverse-login'),
   weverseLogout: () => ipcRenderer.invoke('weverse-logout'),
@@ -71,6 +77,9 @@ const electronAPI = {
   onNaverLoginStatusChanged: (callback: (status: { needLogin: boolean }) => void) => {
     ipcRenderer.on('naver-login-status-changed', (_, status) => callback(status));
   },
+  onTwitterLoginStatusChanged: (callback: (status: { needLogin: boolean }) => void) => {
+    ipcRenderer.on('twitter-login-status-changed', (_, status) => callback(status));
+  },
 
   // 일반적인 이벤트 리스너 메서드
   on: (channel: string, callback: (...args: any[]) => void) => {
@@ -91,7 +100,7 @@ const electronAPI = {
     try {
       return require('../../package.json').version;
     } catch {
-      return '2.1.0';
+      return '2.5.0';
     }
   },
   getPlatform: () => process.platform,

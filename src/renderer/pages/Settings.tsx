@@ -10,6 +10,12 @@ interface SettingsData {
   theme: string;
   needNaverLogin: boolean;
   needWeverseLogin: boolean;
+  needTwitterLogin: boolean;
+  twitterCredentials?: {
+    username: string;
+    password: string;
+    isConfigured: boolean;
+  };
 }
 
 interface SettingsProps {
@@ -17,9 +23,11 @@ interface SettingsProps {
   onNaverActionEnd?: () => void;
   onWeverseActionStart?: (action: 'login' | 'logout') => void;
   onWeverseActionEnd?: () => void;
+  onTwitterActionStart?: (action: 'login' | 'logout' | 'configure') => void;
+  onTwitterActionEnd?: () => void;
 }
 
-const Settings: React.FC<SettingsProps> = ({ onNaverActionStart, onNaverActionEnd, onWeverseActionStart, onWeverseActionEnd }) => {
+const Settings: React.FC<SettingsProps> = ({ onNaverActionStart, onNaverActionEnd, onWeverseActionStart, onWeverseActionEnd, onTwitterActionStart, onTwitterActionEnd }) => {
   console.log('⚙️ Settings page rendering...');
   const [settings, setSettings] = useState<SettingsData>({
     checkInterval: 30,
@@ -29,7 +37,8 @@ const Settings: React.FC<SettingsProps> = ({ onNaverActionStart, onNaverActionEn
     cacheCleanupInterval: 3600,
     theme: 'dark',
     needNaverLogin: true,
-    needWeverseLogin: true
+    needWeverseLogin: true,
+    needTwitterLogin: true
   });
   
   const [isLoading, setIsLoading] = useState(true);
@@ -40,19 +49,30 @@ const Settings: React.FC<SettingsProps> = ({ onNaverActionStart, onNaverActionEn
     loadSettings();
     
     // 네이버 로그인 상태 변경 이벤트 리스너 등록
-    const handleLoginStatusChange = (status: { needLogin: boolean }) => {
-      console.log('🔄 Settings: Login status changed:', status);
+    const handleNaverLoginStatusChange = (status: { needLogin: boolean }) => {
+      console.log('🔄 Settings: Naver login status changed:', status);
       setSettings(prev => ({ ...prev, needNaverLogin: status.needLogin }));
     };
     
+    // 트위터 로그인 상태 변경 이벤트 리스너 등록
+    const handleTwitterLoginStatusChange = (status: { needLogin: boolean }) => {
+      console.log('🔄 Settings: Twitter login status changed:', status);
+      setSettings(prev => ({ ...prev, needTwitterLogin: status.needLogin }));
+    };
+    
     if (window.electronAPI?.onNaverLoginStatusChanged) {
-      window.electronAPI.onNaverLoginStatusChanged(handleLoginStatusChange);
+      window.electronAPI.onNaverLoginStatusChanged(handleNaverLoginStatusChange);
+    }
+    
+    if (window.electronAPI?.onTwitterLoginStatusChanged) {
+      window.electronAPI.onTwitterLoginStatusChanged(handleTwitterLoginStatusChange);
     }
     
     // 컴포넌트 언마운트 시 리스너 해제
     return () => {
       if (window.electronAPI?.removeListener) {
-        window.electronAPI.removeListener('naver-login-status-changed', handleLoginStatusChange);
+        window.electronAPI.removeListener('naver-login-status-changed', handleNaverLoginStatusChange);
+        window.electronAPI.removeListener('twitter-login-status-changed', handleTwitterLoginStatusChange);
       }
     };
   }, []);
@@ -60,6 +80,16 @@ const Settings: React.FC<SettingsProps> = ({ onNaverActionStart, onNaverActionEn
   const loadSettings = async () => {
     try {
       if (window.electronAPI?.getSettings) {
+        // 트위터 로그인 상태 수동 동기화 (설정 로드 전)
+        if (window.electronAPI?.syncTwitterLoginStatus) {
+          try {
+            await window.electronAPI.syncTwitterLoginStatus();
+            console.log('🔄 Twitter login status manually synced');
+          } catch (syncError) {
+            console.warn('⚠️ Failed to sync Twitter login status:', syncError);
+          }
+        }
+        
         const settingsData = await window.electronAPI.getSettings();
         setSettings(settingsData);
       }
@@ -74,13 +104,20 @@ const Settings: React.FC<SettingsProps> = ({ onNaverActionStart, onNaverActionEn
     try {
       setIsSaving(true);
       if (window.electronAPI?.updateSetting) {
-        await window.electronAPI.updateSetting(key, value);
+        const result = await window.electronAPI.updateSetting(key, value);
+        if (!result) {
+          throw new Error('Database not initialized');
+        }
       }
       setSettings(prev => ({ ...prev, [key]: value }));
       setLastSaved(new Date());
+      console.log(`✅ Setting ${key} updated successfully`);
     } catch (error) {
       console.error('Failed to update setting:', error);
-      alert('설정 저장에 실패했습니다.');
+      const errorMessage = (error as Error).message?.includes('Database') 
+        ? '데이터베이스가 초기화되지 않았습니다. 앱을 재시작해주세요.'
+        : '설정 저장에 실패했습니다.';
+      alert(errorMessage);
     } finally {
       setIsSaving(false);
     }
@@ -201,6 +238,49 @@ const Settings: React.FC<SettingsProps> = ({ onNaverActionStart, onNaverActionEn
       onWeverseActionEnd?.();
     }
   };
+
+  const handleTwitterLogin = async () => {
+    onTwitterActionStart?.('login');
+    try {
+      const result = await window.electronAPI.twitterLogin();
+      if (result) {
+        alert('트위터 로그인이 완료되었습니다.');
+        // 설정 새로고침
+        loadSettings();
+      } else {
+        alert('트위터 로그인에 실패했습니다.');
+      }
+    } catch (error) {
+      console.error('Failed to login to Twitter:', error);
+      alert('트위터 로그인 중 오류가 발생했습니다.');
+    } finally {
+      onTwitterActionEnd?.();
+    }
+  };
+
+  const handleTwitterLogout = async () => {
+    if (!confirm('트위터에서 로그아웃하시겠습니까? 트위터 모니터링이 중단됩니다.')) {
+      return;
+    }
+
+    onTwitterActionStart?.('logout');
+    try {
+      const result = await window.electronAPI.twitterLogout();
+      if (result) {
+        alert('트위터 로그아웃이 완료되었습니다.');
+        // 설정 새로고침
+        loadSettings();
+      } else {
+        alert('트위터 로그아웃에 실패했습니다.');
+      }
+    } catch (error) {
+      console.error('Failed to logout from Twitter:', error);
+      alert('트위터 로그아웃 중 오류가 발생했습니다.');
+    } finally {
+      onTwitterActionEnd?.();
+    }
+  };
+
 
   if (isLoading) {
     return (
@@ -373,6 +453,43 @@ const Settings: React.FC<SettingsProps> = ({ onNaverActionStart, onNaverActionEn
               </div>
 
               <div className="border-t border-gray-700 pt-4">
+                <h3 className="text-sm font-medium text-gray-300 mb-2">트위터 로그인 상태</h3>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className={`text-sm ${settings.needTwitterLogin ? 'text-red-400' : 'text-green-400'}`}>
+                      {settings.needTwitterLogin ? '⚠️ 로그인 필요' : '✅ 로그인됨'}
+                    </span>
+                    {!settings.needTwitterLogin && (
+                      <div className="text-xs text-gray-500 mt-1">
+                        봇 탐지 회피 시스템 - 세션 자동 관리
+                      </div>
+                    )}
+                  </div>
+                  {settings.needTwitterLogin ? (
+                    <button
+                      onClick={handleTwitterLogin}
+                      className="btn btn-primary btn-sm"
+                      disabled={isSaving}
+                    >
+                      🐦 트위터 로그인
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleTwitterLogout}
+                      className="btn btn-ghost btn-sm"
+                      disabled={isSaving}
+                    >
+                      🚪 트위터 로그아웃
+                    </button>
+                  )}
+                </div>
+                <p className="text-xs text-gray-400 mt-1">
+                  트위터 모니터링을 위해 계정 로그인이 필요합니다.
+                  브라우저 창이 열리면 직접 로그인해주세요. (네이버 카페, 위버스와 동일한 방식)
+                </p>
+              </div>
+
+              <div className="border-t border-gray-700 pt-4">
                 <h3 className="text-sm font-medium text-gray-300 mb-2">위버스 로그인 상태</h3>
                 <div className="flex items-center justify-between">
                   <div>
@@ -473,6 +590,7 @@ const Settings: React.FC<SettingsProps> = ({ onNaverActionStart, onNaverActionEn
           </div>
         </div>
       </div>
+
     </div>
   );
 };

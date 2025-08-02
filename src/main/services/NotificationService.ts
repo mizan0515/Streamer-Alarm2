@@ -852,9 +852,20 @@ export class NotificationService {
       const fileExtension = this.getImageExtension(imageUrl);
       const cachedPath = path.join(this.tempDir, `profile_${urlHash}${fileExtension}`);
 
-      // 캐시된 파일이 있으면 재사용
+      // 캐시된 파일이 있는지 확인하고 24시간 이내면 재사용
       if (fs.existsSync(cachedPath)) {
-        return cachedPath;
+        const stats = fs.statSync(cachedPath);
+        const twentyFourHoursAgo = Date.now() - (24 * 60 * 60 * 1000);
+        
+        // 24시간 이내의 캐시 파일은 재사용
+        if (stats.mtime.getTime() > twentyFourHoursAgo) {
+          console.log(`Using cached profile image (${Math.round((Date.now() - stats.mtime.getTime()) / (60 * 60 * 1000))}h old): ${cachedPath}`);
+          return cachedPath;
+        } else {
+          // 24시간 이상 된 캐시 파일은 삭제하고 새로 다운로드
+          console.log(`Profile image cache expired, refreshing: ${cachedPath}`);
+          fs.unlinkSync(cachedPath);
+        }
       }
 
       // 이미지 다운로드

@@ -211,16 +211,59 @@ export class CafeMonitor {
         console.warn('⚠️ #account selector not found, trying alternative method');
       }
       
-      // 로그인 상태 확인
-      const isLoggedIn = await loginCheckPage.evaluate(() => {
-        // 다중 로그인 상태 감지 방법
-        const loginElement = document.querySelector('.MyView-module__my_login___tOTgr');
-        const profileElement = document.querySelector('.MyView-module__my_account_name___n6R_V');
-        const accountElement = document.querySelector('#account .MyView-module__my_nickname___IJ_wH');
+      // 로그인 상태 확인 (더 안정적인 다중 시도 방식)
+      let isLoggedIn = false;
+      const maxRetries = 3;
+      
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        console.log(`🔍 로그인 상태 확인 시도 ${attempt}/${maxRetries}...`);
         
-        // 여러 방법으로 로그인 상태 확인
-        return !loginElement || !!profileElement || !!accountElement;
-      });
+        try {
+          // 페이지가 완전히 로드될 때까지 잠시 대기
+          await loginCheckPage.waitForTimeout(1000);
+          
+          isLoggedIn = await loginCheckPage.evaluate(() => {
+            // 다중 로그인 상태 감지 방법 (더 포괄적)
+            const loginElement = document.querySelector('.MyView-module__my_login___tOTgr');
+            const profileElement = document.querySelector('.MyView-module__my_account_name___n6R_V');
+            const accountElement = document.querySelector('#account .MyView-module__my_nickname___IJ_wH');
+            const userNameElement = document.querySelector('.MyView-module__user_name___EWKUe');
+            
+            // 로그인 버튼이 없거나, 프로필/계정/유저명 요소가 있으면 로그인 상태
+            const hasLoginButton = !!loginElement;
+            const hasProfileInfo = !!(profileElement || accountElement || userNameElement);
+            
+            console.log('Login status check:', {
+              hasLoginButton,
+              hasProfileInfo,
+              loginElement: !!loginElement,
+              profileElement: !!profileElement,
+              accountElement: !!accountElement,
+              userNameElement: !!userNameElement
+            });
+            
+            return !hasLoginButton || hasProfileInfo;
+          });
+          
+          // 명확한 결과가 나왔거나 마지막 시도라면 종료
+          if (isLoggedIn || attempt === maxRetries) {
+            break;
+          }
+          
+          // 다음 시도 전 잠시 대기
+          if (attempt < maxRetries) {
+            console.log('❓ 로그인 상태가 불분명합니다. 재시도 중...');
+            await loginCheckPage.waitForTimeout(2000);
+          }
+          
+        } catch (evalError) {
+          console.warn(`⚠️ 로그인 상태 확인 시도 ${attempt} 실패:`, evalError);
+          if (attempt === maxRetries) {
+            // 모든 시도가 실패하면 안전하게 미로그인으로 처리
+            isLoggedIn = false;
+          }
+        }
+      }
       
       // 상태 업데이트
       this.isLoggedIn = isLoggedIn;
@@ -467,13 +510,38 @@ export class CafeMonitor {
         // 로그인 전용 브라우저 정리
         await loginBrowser.close();
         
-        // 약간의 딜레이 후 로그인 상태 재확인
-        await this.delay(this.timeoutConfig.getDelay('login_retry'));
-        console.log('로그인 상태를 확인합니다...');
-        const loginSuccess = await this.checkLoginStatus();
+        // 로그인 완료 후 안정적인 상태 확인 (여러 번 시도)
+        console.log('로그인 완료! 상태 확인 중...');
+        let loginSuccess = false;
+        const maxStatusChecks = 3;
+        
+        for (let attempt = 1; attempt <= maxStatusChecks; attempt++) {
+          console.log(`로그인 상태 확인 시도 ${attempt}/${maxStatusChecks}...`);
+          
+          // 각 시도 전에 딜레이 (첫 번째 시도는 더 긴 딜레이)
+          const delayTime = attempt === 1 ? 
+            this.timeoutConfig.getDelay('login_retry') : 
+            this.timeoutConfig.getDelay('short');
+          await this.delay(delayTime);
+          
+          loginSuccess = await this.checkLoginStatus();
+          
+          if (loginSuccess) {
+            console.log(`✅ 로그인 상태 확인 성공 (${attempt}번째 시도)`);
+            break;
+          } else {
+            console.log(`❌ 로그인 상태 확인 실패 (${attempt}번째 시도)`);
+            if (attempt < maxStatusChecks) {
+              console.log('재시도 중...');
+            }
+          }
+        }
         
         if (loginSuccess) {
+          console.log('🎉 네이버 로그인이 성공적으로 완료되었습니다!');
           await this.settingsService.updateSetting('needNaverLogin', false);
+        } else {
+          console.log('⚠️ 로그인은 완료되었지만 상태 확인에 실패했습니다.');
         }
         
         return loginSuccess;

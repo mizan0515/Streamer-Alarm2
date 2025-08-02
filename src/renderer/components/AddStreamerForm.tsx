@@ -137,6 +137,15 @@ const AddStreamerForm: React.FC<AddStreamerFormProps> = ({
                   placeholder="예: Aesther_Arisa (@없이)"
                   disabled={isLoading}
                 />
+                <div className="bg-blue-900/20 border border-blue-600/30 rounded-lg p-2 mt-2">
+                  <div className="flex items-start space-x-2">
+                    <span className="text-blue-400 mt-0.5">ℹ️</span>
+                    <div className="text-xs text-blue-300">
+                      <p>트위터 모니터링을 위해서는 <strong>설정 &gt; 계정 관리</strong>에서 트위터 계정 로그인이 필요합니다.</p>
+                      <p className="mt-1">로그인 후 자동으로 트윗을 스크래핑하여 실시간 알림을 제공합니다.</p>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <div>
@@ -200,7 +209,10 @@ const AddStreamerForm: React.FC<AddStreamerFormProps> = ({
                     className="rounded"
                     disabled={isLoading}
                   />
-                  <span className="text-sm text-gray-300">🐦 트위터 알림</span>
+                  <div className="flex items-center space-x-2">
+                    <span className="text-sm text-gray-300">🐦 트위터 알림</span>
+                    <span className="text-xs text-yellow-400">로그인 필요</span>
+                  </div>
                 </label>
                 
                 <label className="flex items-center space-x-3">

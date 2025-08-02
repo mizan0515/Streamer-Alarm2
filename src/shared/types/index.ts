@@ -88,6 +88,7 @@ export interface TwitterTweet {
   contentHtml?: string;
   url: string;
   timestamp: string;
+  profileImageUrl?: string;
 }
 
 // 위버스 아티스트 타입
@@ -186,8 +187,11 @@ export type SettingKey =
   | 'theme'
   | 'needNaverLogin'
   | 'needWeverseLogin'
+  | 'needTwitterLogin'
+  | 'twitterCredentials'
   | 'newStreamerFilterHours' // 새 스트리머 과거 알림 필터링 시간 (시간 단위)
   | 'currentBrowser' // 현재 사용 중인 브라우저 (Weverse용)
+  | 'currentCafeBrowser' // 기본 브라우저 (Cafe용)
   | 'currentCafeBrowser'; // 현재 사용 중인 브라우저 (Cafe용)
 
 // 알림 설정 컨텍스트

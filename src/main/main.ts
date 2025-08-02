@@ -208,7 +208,8 @@ class StreamerAlarmApp {
         return result;
       } catch (error) {
         console.error('❌ IPC: get-streamers failed:', error);
-        throw error;
+        console.error('Database may not be initialized. Returning empty array.');
+        return []; // 빈 배열 반환으로 앱이 계속 작동하도록
       }
     });
 
@@ -344,24 +345,48 @@ class StreamerAlarmApp {
       // 시스템의 실제 자동 시작 상태도 함께 반환
       const systemAutoStart = this.settingsService.isAutoStartEnabled();
       
+      // 실제 Twitter 로그인 상태 확인하여 동기화
+      let actualTwitterLoginStatus = settings.needTwitterLogin;
+      try {
+        const twitterLoginStatus = this.monitoringService.getTwitterLoginStatus();
+        actualTwitterLoginStatus = !twitterLoginStatus; // needLogin은 로그인 안됨 상태를 나타냄
+        console.log(`🔍 Twitter login status sync: actual=${twitterLoginStatus}, needLogin=${actualTwitterLoginStatus}`);
+        
+        // 상태가 다르면 설정 업데이트 및 알림
+        if (actualTwitterLoginStatus !== settings.needTwitterLogin) {
+          console.log(`🔄 Twitter login status mismatch detected, updating: ${settings.needTwitterLogin} → ${actualTwitterLoginStatus}`);
+          await this.settingsService.updateSetting('needTwitterLogin', actualTwitterLoginStatus);
+          this.monitoringService.notifyTwitterLoginStatusChange(actualTwitterLoginStatus);
+        }
+      } catch (error) {
+        console.warn('⚠️ Failed to get actual Twitter login status:', error);
+      }
+      
       return {
         ...settings,
-        autoStart: systemAutoStart // 시스템 상태로 덮어쓰기
+        autoStart: systemAutoStart, // 시스템 상태로 덮어쓰기
+        needTwitterLogin: actualTwitterLoginStatus // 실제 상태로 덮어쓰기
       };
     });
 
     ipcMain.handle('update-setting', async (_, { key, value }) => {
       console.log(`🔧 IPC: Updating setting ${key} to ${value}`);
-      await this.settingsService.updateSetting(key, value);
-      
-      // 자동 시작 설정이 변경된 경우 즉시 동기화
-      if (key === 'autoStart') {
-        console.log('🚀 Auto-start setting changed, syncing...');
-        const systemEnabled = this.settingsService.isAutoStartEnabled();
-        console.log(`System auto-start status after update: ${systemEnabled}`);
+      try {
+        await this.settingsService.updateSetting(key, value);
+        
+        // 자동 시작 설정이 변경된 경우 즉시 동기화
+        if (key === 'autoStart') {
+          console.log('🚀 Auto-start setting changed, syncing...');
+          const systemEnabled = this.settingsService.isAutoStartEnabled();
+          console.log(`System auto-start status after update: ${systemEnabled}`);
+        }
+        
+        return true;
+      } catch (error) {
+        console.error('❌ IPC: update-setting failed:', error);
+        console.error('Database may not be initialized. Setting not saved.');
+        return false; // 실패를 알리지만 앱은 계속 작동
       }
-      
-      return true;
     });
 
     // 모니터링 관련 IPC
@@ -388,6 +413,46 @@ class StreamerAlarmApp {
 
     ipcMain.handle('naver-logout', async () => {
       return await this.monitoringService.initiateNaverLogout();
+    });
+
+    // Twitter 로그인/로그아웃 및 자격증명 관리
+    ipcMain.handle('twitter-login', async () => {
+      try {
+        return await this.monitoringService.initiateTwitterLogin();
+      } catch (error) {
+        console.error('Twitter login failed:', error);
+        return false;
+      }
+    });
+
+    ipcMain.handle('twitter-logout', async () => {
+      try {
+        return await this.monitoringService.initiateTwitterLogout();
+      } catch (error) {
+        console.error('Twitter logout failed:', error);
+        return false;
+      }
+    });
+
+    ipcMain.handle('update-twitter-credentials', async (_, { username, password }) => {
+      try {
+        this.monitoringService.updateTwitterCredentials(username, password);
+        return true;
+      } catch (error) {
+        console.error('Twitter credentials update failed:', error);
+        return false;
+      }
+    });
+
+    ipcMain.handle('sync-twitter-login-status', async () => {
+      try {
+        console.log('🔄 Manual Twitter login status sync requested');
+        await this.monitoringService.syncTwitterLoginStatus();
+        return true;
+      } catch (error) {
+        console.error('Manual Twitter login status sync failed:', error);
+        return false;
+      }
     });
 
     // 위버스 관련 IPC
