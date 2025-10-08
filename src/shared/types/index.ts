@@ -6,6 +6,7 @@ export interface StreamerData {
   chzzkId?: string;
   twitterUsername?: string;
   naverCafeUserId?: string;
+  cafeNickname?: string;
   cafeClubId: string;
   profileImageUrl?: string;
   isActive: boolean;

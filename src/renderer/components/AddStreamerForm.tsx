@@ -16,7 +16,7 @@ const AddStreamerForm: React.FC<AddStreamerFormProps> = ({
     name: '',
     chzzkId: '',
     twitterUsername: '',
-    naverCafeUserId: '',
+    cafeNickname: '',
     cafeClubId: '',
     profileImageUrl: '',
     isActive: true,
@@ -36,7 +36,7 @@ const AddStreamerForm: React.FC<AddStreamerFormProps> = ({
       newErrors.name = '스트리머 이름은 필수입니다';
     }
 
-    if (!formData.chzzkId && !formData.twitterUsername && !formData.naverCafeUserId) {
+    if (!formData.chzzkId && !formData.twitterUsername && !formData.cafeNickname) {
       newErrors.platforms = '최소 하나의 플랫폼 정보는 입력해야 합니다';
     }
 
@@ -150,16 +150,19 @@ const AddStreamerForm: React.FC<AddStreamerFormProps> = ({
 
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-2">
-                  💬 네이버 카페 사용자 ID
+                  💬 네이버 카페 닉네임
                 </label>
                 <input
                   type="text"
-                  value={formData.naverCafeUserId}
-                  onChange={(e) => handleInputChange('naverCafeUserId', e.target.value)}
+                  value={formData.cafeNickname}
+                  onChange={(e) => handleInputChange('cafeNickname', e.target.value)}
                   className="input"
-                  placeholder="예: cuEWXUyMqKzQGLwr3RwrXw"
+                  placeholder="예: 아리사"
                   disabled={isLoading}
                 />
+                <p className="text-xs text-gray-400 mt-1">
+                  💡 카페에서 사용하는 닉네임을 정확히 입력해주세요
+                </p>
               </div>
 
               <div>

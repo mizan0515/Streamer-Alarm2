@@ -515,27 +515,63 @@ export class TwitterMonitor {
       // 트윗 ID 추출
       const tweetLink = await tweetElement.$('a[href*="/status/"]');
       if (!tweetLink) return null;
-      
+
       const href = await tweetLink.getAttribute('href');
       if (!href) return null;
-      
-      const tweetIdMatch = href.match(/\/status\/(\d+)/);
+
+      // analytics, photo 등 하위 경로 제외 (순수 트윗 링크만 허용)
+      if (href.includes('/analytics') || href.includes('/photo/') || href.includes('/video/')) {
+        console.log(`⏭️ Skipping non-tweet URL: ${href}`);
+        return null;
+      }
+
+      const tweetIdMatch = href.match(/\/status\/(\d+)$/);
       if (!tweetIdMatch) return null;
-      
+
       const tweetId = tweetIdMatch[1];
       
+      // 트윗 작성자 확인 (리트윗/멘션 스팸 차단)
+      const authorElement = await tweetElement.$('[data-testid="User-Name"] a[role="link"]');
+      if (authorElement) {
+        const authorHref = await authorElement.getAttribute('href');
+        if (authorHref) {
+          // URL에서 사용자명 추출 및 비교
+          const authorMatch = authorHref.match(/^\/([^\/]+)/);
+          const currentUrl = await tweetElement.page().url();
+          const profileUsernameMatch = currentUrl.match(/x\.com\/([^\/]+)/);
+
+          if (authorMatch && profileUsernameMatch) {
+            const authorUsername = authorMatch[1].toLowerCase();
+            const profileUsername = profileUsernameMatch[1].toLowerCase();
+
+            // 작성자가 프로필 주인과 다르면 스팸 (리트윗, 멘션 등)
+            if (authorUsername !== profileUsername) {
+              console.log(`🚫 Blocking spam tweet - Author: @${authorUsername}, Profile: @${profileUsername}`);
+              return null;
+            }
+          }
+        }
+      }
+
       // 트윗 내용 추출
       const tweetTextElement = await tweetElement.$('[data-testid="tweetText"]');
       let content = '';
       let contentHtml = '';
-      
+
       if (tweetTextElement) {
         content = await tweetTextElement.textContent() || '';
         contentHtml = await tweetTextElement.innerHTML() || '';
       }
-      
+
       // 내용 정제
       content = this.cleanTweetContent(content);
+
+      // 스팸 키워드 필터링 (추가 보안층)
+      const spamKeywords = ['analytics', 'promoted', '광고', 'sponsored'];
+      if (spamKeywords.some(keyword => content.toLowerCase().includes(keyword))) {
+        console.log(`🚫 Blocking spam tweet with keyword: ${content.substring(0, 50)}`);
+        return null;
+      }
       
       // 시간 정보 추출
       const timeElement = await tweetElement.$('time');

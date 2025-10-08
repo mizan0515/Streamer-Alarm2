@@ -14,7 +14,7 @@ import {
 export class DatabaseManager {
   private db!: Database.Database;
   private dbPath: string;
-  private readonly CURRENT_SCHEMA_VERSION = 4; // 현재 스키마 버전
+  private readonly CURRENT_SCHEMA_VERSION = 5; // 현재 스키마 버전
 
   constructor() {
     // 데이터베이스 경로 설정 (userData 디렉토리)
@@ -185,6 +185,7 @@ export class DatabaseManager {
         chzzk_id TEXT,
         twitter_username TEXT,
         naver_cafe_user_id TEXT,
+        cafe_nickname TEXT,
         cafe_club_id TEXT DEFAULT '30919539',
         profile_image_url TEXT,
         is_active BOOLEAN DEFAULT 1,
@@ -433,6 +434,9 @@ export class DatabaseManager {
         case 4:
           this.migrateToVersion4();
           break;
+        case 5:
+          this.migrateToVersion5();
+          break;
         default:
           throw new Error(`Unknown migration version: ${version}`);
       }
@@ -559,6 +563,51 @@ export class DatabaseManager {
         
       } catch (error) {
         this.logError('Migration v4 failed', error);
+        throw error;
+      }
+    });
+    
+    migration();
+  }
+
+  private migrateToVersion5(): void {
+    console.log('📝 Migration v5: Changing naver_cafe_user_id to cafe_nickname');
+    
+    const migration = this.db.transaction(() => {
+      try {
+        // 1. 먼저 현재 streamers 테이블의 구조 확인
+        const tableInfo = this.db.prepare("PRAGMA table_info(streamers)").all();
+        const existingColumns = tableInfo.map((col: any) => col.name);
+        
+        if (existingColumns.includes('naver_cafe_user_id')) {
+          // 2. cafe_nickname 컬럼이 이미 있는지 확인
+          if (!existingColumns.includes('cafe_nickname')) {
+            // 3. cafe_nickname 컬럼 추가
+            this.db.exec(`ALTER TABLE streamers ADD COLUMN cafe_nickname TEXT`);
+            console.log('✅ Added cafe_nickname column');
+          }
+          
+          // 4. 기존 naver_cafe_user_id 데이터가 있다면 백업용으로 보존하고 cafe_nickname에는 빈 값으로 설정
+          // 실제 운영 환경에서는 사용자가 직접 닉네임을 입력해야 함
+          this.db.exec(`
+            UPDATE streamers 
+            SET cafe_nickname = CASE 
+              WHEN naver_cafe_user_id IS NOT NULL AND naver_cafe_user_id != '' 
+              THEN '닉네임_입력_필요' 
+              ELSE NULL 
+            END
+          `);
+          console.log('✅ Migrated existing data to cafe_nickname column');
+          
+          // 5. 이전 naver_cafe_user_id 컬럼을 제거하지 않고 백업용으로 보존
+          // SQLite에서는 컬럼 삭제가 복잡하므로 일단 보존
+          console.log('ℹ️ Keeping naver_cafe_user_id column for backup purposes');
+        }
+        
+        console.log('✅ Migration v5: Successfully changed schema to use cafe_nickname');
+        
+      } catch (error) {
+        console.error('❌ Migration v5 failed:', error);
         throw error;
       }
     });
@@ -977,6 +1026,7 @@ export class DatabaseManager {
           chzzkId: row.chzzk_id,
           twitterUsername: row.twitter_username,
           naverCafeUserId: row.naver_cafe_user_id,
+          cafeNickname: row.cafe_nickname,
           cafeClubId: row.cafe_club_id,
           profileImageUrl: row.profile_image_url,
           isActive: Boolean(row.is_active),
@@ -994,9 +1044,9 @@ export class DatabaseManager {
   async addStreamer(streamerData: Omit<StreamerData, 'id' | 'createdAt' | 'updatedAt'>): Promise<StreamerData> {
     const insertStreamer = this.db.prepare(`
       INSERT INTO streamers (
-        name, chzzk_id, twitter_username, naver_cafe_user_id, 
+        name, chzzk_id, twitter_username, naver_cafe_user_id, cafe_nickname,
         cafe_club_id, profile_image_url, is_active
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const result = insertStreamer.run(
@@ -1004,6 +1054,7 @@ export class DatabaseManager {
       streamerData.chzzkId || null,
       streamerData.twitterUsername || null,
       streamerData.naverCafeUserId || null,
+      streamerData.cafeNickname || null,
       streamerData.cafeClubId,
       streamerData.profileImageUrl || null,
       streamerData.isActive ? 1 : 0
@@ -1035,7 +1086,7 @@ export class DatabaseManager {
   async updateStreamer(streamerData: StreamerData): Promise<StreamerData> {
     const updateStreamer = this.db.prepare(`
       UPDATE streamers SET
-        name = ?, chzzk_id = ?, twitter_username = ?, naver_cafe_user_id = ?,
+        name = ?, chzzk_id = ?, twitter_username = ?, naver_cafe_user_id = ?, cafe_nickname = ?,
         cafe_club_id = ?, profile_image_url = ?, is_active = ?
       WHERE id = ?
     `);
@@ -1045,6 +1096,7 @@ export class DatabaseManager {
       streamerData.chzzkId || null,
       streamerData.twitterUsername || null,
       streamerData.naverCafeUserId || null,
+      streamerData.cafeNickname || null,
       streamerData.cafeClubId,
       streamerData.profileImageUrl || null,
       streamerData.isActive ? 1 : 0,
@@ -1601,9 +1653,9 @@ export class DatabaseManager {
       Object.entries(streamersData).forEach(([name, data]: [string, any]) => {
         const insertStreamer = this.db.prepare(`
           INSERT INTO streamers (
-            name, chzzk_id, twitter_username, naver_cafe_user_id, 
+            name, chzzk_id, twitter_username, naver_cafe_user_id, cafe_nickname,
             cafe_club_id, profile_image_url, is_active
-          ) VALUES (?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         const result = insertStreamer.run(
@@ -1611,6 +1663,7 @@ export class DatabaseManager {
           data.chzzk_id || null,
           data.twitter_username || null,
           data.cafe_user_id || null,
+          null, // cafe_nickname을 null로 설정 (마이그레이션 후 사용자가 직접 입력)
           data.cafe_club_id || '30919539',
           data.profile_image || null,
           data.enabled !== false ? 1 : 0

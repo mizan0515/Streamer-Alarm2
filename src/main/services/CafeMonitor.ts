@@ -24,7 +24,7 @@ export class CafeMonitor {
   private lastKnownLoginStatus: boolean = false;
   private timeoutConfig: TimeoutConfig;
 
-  // 카페 시간 파싱 함수
+  // 카페 시간 파싱 함수 (검색 결과용)
   private parseCafeDate(dateText: string): Date {
     try {
       const now = new Date();
@@ -32,22 +32,45 @@ export class CafeMonitor {
       const currentMonth = now.getMonth();
       const currentDate = now.getDate();
 
-      // 오늘 작성된 글 (예: "02:23")
-      if (/^\d{2}:\d{2}$/.test(dateText)) {
+      // 시간과 분 형식 (예: "04:09") - 오늘 작성된 글
+      if (/^\d{1,2}:\d{2}$/.test(dateText)) {
         const [hours, minutes] = dateText.split(':').map(Number);
         const postDate = new Date(currentYear, currentMonth, currentDate, hours, minutes);
         return postDate;
       }
 
-      // 이전 날짜 (예: "2025.07.07.")
-      if (/^\d{4}\.\d{2}\.\d{2}\.$/.test(dateText)) {
-        const [year, month, day] = dateText.replace('.', '').split('.').map(Number);
-        const postDate = new Date(year, month - 1, day); // month는 0-based
+      // 날짜 형식 (예: "2025.08.04.") - 과거 날짜
+      if (/^\d{4}\.\d{1,2}\.\d{1,2}\.$/.test(dateText)) {
+        const dateOnly = dateText.replace(/\.$/, ''); // 마지막 점 제거
+        const [year, month, day] = dateOnly.split('.').map(Number);
+        const postDate = new Date(year, month - 1, day, 0, 0, 0); // month는 0-based, 시간은 00:00으로 설정
         return postDate;
       }
 
+      // MM.DD 형식 (예: "08.04") - 올해 날짜
+      if (/^\d{1,2}\.\d{1,2}$/.test(dateText)) {
+        const [month, day] = dateText.split('.').map(Number);
+        const postDate = new Date(currentYear, month - 1, day, 0, 0, 0);
+        return postDate;
+      }
+
+      // 어제, 그저께 등의 상대적 표현
+      if (dateText === '어제') {
+        const yesterday = new Date(now);
+        yesterday.setDate(now.getDate() - 1);
+        yesterday.setHours(12, 0, 0, 0); // 정오로 설정
+        return yesterday;
+      }
+
+      if (dateText === '그저께') {
+        const dayBeforeYesterday = new Date(now);
+        dayBeforeYesterday.setDate(now.getDate() - 2);
+        dayBeforeYesterday.setHours(12, 0, 0, 0);
+        return dayBeforeYesterday;
+      }
+
       // 파싱 실패 시 현재 시간 반환
-      console.warn(`Failed to parse cafe date: ${dateText}, using current time`);
+      console.warn(`Failed to parse cafe date: "${dateText}", using current time`);
       return now;
 
     } catch (error) {
@@ -108,17 +131,48 @@ export class CafeMonitor {
           headless: true,
           args: [
             '--no-sandbox',
-            '--disable-setuid-sandbox',
+            '--disable-setuid-sandbox', 
             '--disable-dev-shm-usage',
             '--disable-accelerated-2d-canvas',
             '--no-first-run',
             '--no-zygote',
-            '--disable-gpu'
+            '--disable-gpu',
+            // 강화된 자동화 감지 우회 옵션들
+            '--disable-blink-features=AutomationControlled',
+            '--disable-features=VizDisplayCompositor',
+            '--disable-web-security',
+            '--disable-features=site-per-process',
+            '--disable-ipc-flooding-protection',
+            '--disable-backgrounding-occluded-windows',
+            '--disable-renderer-backgrounding',
+            '--disable-field-trial-config',
+            '--disable-back-forward-cache',
+            '--disable-extensions',
+            '--disable-plugins-discovery',
+            '--disable-default-apps',
+            '--no-default-browser-check',
+            '--no-pings',
+            '--no-experiments',
+            '--disable-sync',
+            '--disable-translate',
+            '--hide-scrollbars',
+            '--mute-audio',
+            '--disable-client-side-phishing-detection',
+            '--disable-component-extensions-with-background-pages',
+            '--disable-background-timer-throttling',
+            '--disable-features=TranslateUI',
+            '--disable-hang-monitor',
+            '--disable-prompt-on-repost',
+            '--disable-domain-reliability',
+            '--disable-component-update'
           ],
-          userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
           viewport: { width: 1280, height: 720 },
           locale: 'ko-KR',
-          channel: browserInfo.channel
+          channel: browserInfo.channel,
+          // 자동화 감지 우회를 위한 추가 옵션들
+          ignoreDefaultArgs: ['--enable-automation', '--enable-blink-features=AutomationControlled'],
+          ignoreHTTPSErrors: true
         };
 
         const context = await chromium.launchPersistentContext(this.browserDataPath, launchOptions);
@@ -164,10 +218,127 @@ export class CafeMonitor {
       this.isPersistentContext = true;
       this.page = await this.context.newPage();
       
+      // 강화된 자동화 감지 우회 스크립트 추가
+      await this.page.addInitScript(() => {
+        console.log('🛡️ Anti-detection script initializing...');
+        
+        // webdriver 속성 완전 삭제
+        Object.defineProperty(navigator, 'webdriver', {
+          get: () => undefined,
+        });
+        
+        // plugins 배열을 실제 플러그인처럼 조작
+        Object.defineProperty(navigator, 'plugins', {
+          get: () => [
+            {
+              description: "Portable Document Format",
+              filename: "internal-pdf-viewer",
+              name: "Chrome PDF Plugin"
+            },
+            {
+              description: "Chromium PDF Plugin",
+              filename: "internal-pdf-viewer", 
+              name: "Chrome PDF Viewer"
+            },
+            {
+              description: "Native Client",
+              filename: "internal-nacl-plugin",
+              name: "Native Client"
+            }
+          ],
+        });
+        
+        // languages 배열 설정
+        Object.defineProperty(navigator, 'languages', {
+          get: () => ['ko-KR', 'ko', 'en-US', 'en'],
+        });
+        
+        // hardwareConcurrency 설정
+        Object.defineProperty(navigator, 'hardwareConcurrency', {
+          get: () => 4,
+        });
+        
+        // deviceMemory 설정
+        Object.defineProperty(navigator, 'deviceMemory', {
+          get: () => 8,
+        });
+        
+        // permissions 조작
+        const originalQuery = window.navigator.permissions.query;
+        window.navigator.permissions.query = (parameters: any) => (
+          parameters.name === 'notifications' ?
+            Promise.resolve({ state: Notification.permission } as any) :
+            originalQuery(parameters)
+        );
+        
+        // Chrome 관련 객체들 정리
+        if ('chrome' in window && (window as any).chrome) {
+          // runtime 삭제하되 다른 속성들은 유지
+          delete (window as any).chrome.runtime;
+          delete (window as any).chrome.csi;
+          delete (window as any).chrome.loadTimes;
+        }
+        
+        // Automation 관련 속성들 삭제
+        if ('__webdriver_evaluate' in window) delete (window as any).__webdriver_evaluate;
+        if ('__selenium_evaluate' in window) delete (window as any).__selenium_evaluate;
+        if ('__webdriver_script_function' in window) delete (window as any).__webdriver_script_function;
+        if ('__webdriver_script_func' in window) delete (window as any).__webdriver_script_func;
+        if ('__webdriver_script_fn' in window) delete (window as any).__webdriver_script_fn;
+        if ('__fxdriver_evaluate' in window) delete (window as any).__fxdriver_evaluate;
+        if ('__driver_unwrapped' in window) delete (window as any).__driver_unwrapped;
+        if ('__webdriver_unwrapped' in window) delete (window as any).__webdriver_unwrapped;
+        if ('__driver_evaluate' in window) delete (window as any).__driver_evaluate;
+        if ('__selenium_unwrapped' in window) delete (window as any).__selenium_unwrapped;
+        if ('__fxdriver_unwrapped' in window) delete (window as any).__fxdriver_unwrapped;
+        
+        // DocumentContext를 실제처럼 만들기
+        Object.defineProperty(document, '$cdc_asdjflasutopfhvcZLmcfl_', {
+          get: () => undefined,
+        });
+        
+        // 추가적인 자동화 감지 우회
+        // MouseEvent와 같은 이벤트들을 자연스럽게 조작
+        const originalAddEventListener = EventTarget.prototype.addEventListener;
+        EventTarget.prototype.addEventListener = function(type, listener, options) {
+          // 자동화 도구 감지를 위한 특정 이벤트들을 필터링
+          if (typeof listener === 'function' && listener.toString().indexOf('automation') > -1) {
+            return;
+          }
+          return originalAddEventListener.call(this, type, listener, options);
+        };
+        
+        // iframe 생성 감지 및 처리 (더 안전한 방식)
+        const originalCreateElement = document.createElement;
+        (document as any).createElement = function(tagName: string) {
+          const element = originalCreateElement.call(this, tagName as "webview");
+          if (tagName.toLowerCase() === 'iframe') {
+            try {
+              (element as any).onload = function() {
+                try {
+                  if ((element as any).contentWindow?.navigator) {
+                    Object.defineProperty((element as any).contentWindow.navigator, 'webdriver', {
+                      get: () => undefined,
+                    });
+                  }
+                } catch (e) {
+                  // Cross-origin 제한으로 실패할 수 있음 - 무시
+                }
+              };
+            } catch (e) {
+              // 오류 무시
+            }
+          }
+          return element;
+        };
+        
+        console.log('✅ Enhanced anti-detection script completed');
+      });
+      
       // 타임아웃 설정
       this.page.setDefaultTimeout(15000);
       
-      console.log('Cafe browser initialized with persistent context');
+      console.log('Cafe browser initialized with persistent context and anti-detection scripts');
     } catch (error) {
       console.error('Failed to setup browser:', error);
       throw error;
@@ -574,7 +745,7 @@ export class CafeMonitor {
 
     try {
       const streamers = await this.databaseManager.getStreamers();
-      const activeStreamers = streamers.filter(s => s.isActive && s.naverCafeUserId);
+      const activeStreamers = streamers.filter(s => s.isActive && s.cafeNickname);
 
       if (!silentMode) {
         console.log(`Checking ${activeStreamers.length} cafe streamers...`);
@@ -590,7 +761,7 @@ export class CafeMonitor {
           processedCount++;
           
           if (!silentMode) {
-            console.log(`🔄 Processing cafe streamer ${processedCount}/${totalStreamers}: ${streamer.name}`);
+            console.log(`🔄 Processing cafe streamer ${processedCount}/${totalStreamers}: ${streamer.name} (@${streamer.cafeNickname})`);
           }
           
           const posts = await this.checkStreamerPosts(streamer, silentMode);
@@ -625,7 +796,7 @@ export class CafeMonitor {
                     post.title,
                     post.url,
                     latestStreamer.profileImageUrl,
-                    new Date(post.timestamp), // Pass the original post timestamp
+                    this.parseCafeDate(post.timestamp), // Use parseCafeDate for proper timestamp parsing
                     contentHtml // Pass the extracted HTML content
                   );
                   await this.notificationService.sendNotification(notification);
@@ -678,149 +849,387 @@ export class CafeMonitor {
   }
 
   private async checkStreamerPosts(streamer: StreamerData, _silentMode: boolean = false): Promise<CafePost[]> {
-    if (!streamer.naverCafeUserId || !this.page) {
-      console.log(`${streamer.name}: 카페 사용자 ID 또는 페이지가 없습니다.`);
+    if (!streamer.cafeNickname || !this.page) {
+      console.log(`${streamer.name}: 카페 닉네임 또는 페이지가 없습니다.`);
       return [];
     }
 
     try {
-      // 카페 멤버 페이지로 이동
-      const cafeUrl = `https://cafe.naver.com/ca-fe/cafes/${streamer.cafeClubId}/members/${streamer.naverCafeUserId}`;
-      console.log(`${streamer.name}: 카페 URL 접근 - ${cafeUrl}`);
-      
-      await this.page.goto(cafeUrl, { 
-        waitUntil: 'domcontentloaded', 
-        timeout: this.timeoutConfig.getBrowserTimeout('navigation_fast') 
-      });
-      
-      // 최소 대기 - 테이블이 바로 로드되는지 확인
-      try {
-        await this.page.waitForSelector('.article-board table tbody tr', { 
-          timeout: this.timeoutConfig.getBrowserTimeout('selector_fast') 
-        });
-      } catch (selectorError) {
-        console.log(`${streamer.name}: 게시물 목록을 찾을 수 없습니다.`);
-        return [];
-      }
-      
-      const posts = await this.page.evaluate(() => {
-        const rows = document.querySelectorAll('.article-board table tbody tr');
-        const posts: any[] = [];
-
-        rows.forEach((row, index) => {
-          if (index >= 15) return; // 최신 15개만
-          
-          const articleCell = row.querySelector('td.td_article');
-          const dateCell = row.querySelector('td.td_date');
-          const articleLink = articleCell?.querySelector('a[href*="articleid"]');
-          
-          if (articleLink && dateCell) {
-            const title = articleLink.textContent?.trim();
-            const href = articleLink.getAttribute('href');
-            const date = dateCell.textContent?.trim();
-            const articleIdMatch = href?.match(/articleid=(\d+)/);
-            const articleId = articleIdMatch ? articleIdMatch[1] : '';
-            
-            if (title && href && articleId) {
-              posts.push({
-                title,
-                url: href.startsWith('http') ? href : `https://cafe.naver.com${href}`,
-                date,
-                id: articleId
-              });
-            }
-          }
-        });
-
-        return { posts, debugInfo: [] };
-      });
-      
-      // 데이터베이스에서 마지막 게시물 ID 조회
+      // 1. 마지막 모니터링 상태 확인
       const lastState = await this.databaseManager.getMonitorState(streamer.id, 'cafe');
-      const lastPostId = lastState?.lastContentId || this.lastPostIds.get(streamer.naverCafeUserId);
+      const isFirstTime = !lastState || !lastState.lastContentId;
       
-      // 🚨 NEW: 새 스트리머 초기화 처리 (과거 알림 폭탄 방지)
-      const isNewStreamer = !lastPostId;
-      if (isNewStreamer) {
-        console.log(`🆕 ${streamer.name}: 새 스트리머 감지됨 - 과거 알림 차단 모드 활성화`);
-        
-        // 최신 게시물 ID만 저장하고 알림은 차단
-        if (posts.posts.length > 0 && posts.posts[0].id) {
-          await this.databaseManager.setMonitorState(
-            streamer.id,
-            'cafe',
-            posts.posts[0].id, // 현재 최신 게시물을 기준점으로 설정
-            'initialized'
-          );
-          this.lastPostIds.set(streamer.naverCafeUserId, posts.posts[0].id);
-          console.log(`🆕 ${streamer.name}: 초기 기준점 설정 완료 (ID: ${posts.posts[0].id})`);
-        }
-        
-        // 새 스트리머는 빈 배열 반환 (과거 알림 차단)
-        return [];
+      if (isFirstTime) {
+        console.log(`${streamer.name}: 🆕 첫 모니터링 - 베이스라인 설정 모드`);
+        return await this.setBaselineOnly(streamer);
       }
       
-      const newPosts: CafePost[] = [];
+      // 2. 일반 모니터링: 스마트 페이지 탐색
+      console.log(`${streamer.name}: 🔄 일반 모니터링 - 마지막 게시글 ID: ${lastState.lastContentId || 'N/A'}`);
+      return await this.searchFromLastPost(streamer, lastState.lastContentId);
 
-      for (const post of posts.posts) {
-        if (!post.id) continue;
-
-        // 새 게시물인지 확인 (숫자 비교)
-        const isNewPost = this.compareCafePostIds(post.id, lastPostId) > 0;
-        
-        if (isNewPost) {
-          const originalTimestamp = this.parseCafeDate(post.date);
-          
-          // 🚨 NEW: 시간 기반 이중 필터링 (설정 가능한 시간 내 게시물만)
-          const now = new Date();
-          const timeDiff = now.getTime() - originalTimestamp.getTime();
-          const hoursAgo = timeDiff / (1000 * 60 * 60);
-          const filterHours = parseInt(this.settingsService.getSetting('newStreamerFilterHours'));
-          
-          if (hoursAgo > filterHours) {
-            console.log(`⏰ ${streamer.name}: 게시물 "${post.title}" - ${filterHours}시간 이상 경과 (${hoursAgo.toFixed(1)}시간), 알림 차단`);
-            continue;
-          }
-          
-          console.log(`${streamer.name}: 게시물 "${post.title}" - 원본 시간: ${post.date} → 파싱된 시간: ${originalTimestamp.toISOString()}`);
-          
-          newPosts.push({
-            id: post.id,
-            title: post.title,
-            url: post.url,
-            author: streamer.name,
-            timestamp: originalTimestamp.toISOString()
-          });
-        }
-      }
-
-      console.log(`${streamer.name}: 총 ${posts.posts.length}개 게시물 중 새 게시물 ${newPosts.length}개 발견`);
-      
-      if (newPosts.length > 0) {
-        console.log(`${streamer.name}: 새 게시물 목록:`);
-        newPosts.forEach((post, index) => {
-          console.log(`  ${index + 1}. [${post.id}] ${post.title}`);
-        });
-      }
-
-      // 가장 최신 게시물 ID를 데이터베이스에 저장
-      if (posts.posts.length > 0 && posts.posts[0].id) {
-        await this.databaseManager.setMonitorState(
-          streamer.id,
-          'cafe',
-          posts.posts[0].id, // 첫 번째가 가장 최신
-          'checked'
-        );
-        
-        // 메모리 캐시도 업데이트 (호환성 유지)
-        this.lastPostIds.set(streamer.naverCafeUserId, posts.posts[0].id);
-        console.log(`${streamer.name}: 최신 게시물 ID ${posts.posts[0].id} 저장 완료`);
-      }
-
-      return newPosts;
     } catch (error) {
       console.error(`Error checking posts for ${streamer.name}:`, error);
       return [];
+    }
+  }
+
+  /**
+   * 베이스라인 설정: 현재 최신 게시글만 기록하고 알림은 보내지 않음
+   */
+  private async setBaselineOnly(streamer: StreamerData): Promise<CafePost[]> {
+    try {
+      console.log(`${streamer.name}: 📍 베이스라인 설정 중 (알림 없음)...`);
+      
+      const posts = await this.searchSinglePage(streamer, 1);
+      
+      if (posts.length > 0) {
+        // 가장 최신 게시글 ID를 데이터베이스에 저장
+        await this.databaseManager.setMonitorState(
+          streamer.id, 
+          'cafe', 
+          posts[0].id, 
+          'baseline_set'
+        );
+        
+        console.log(`${streamer.name}: ✅ 베이스라인 설정 완료 - 최신 게시글 ID: ${posts[0].id}`);
+        console.log(`${streamer.name}: 💡 다음 모니터링부터 새 게시글 알림이 시작됩니다.`);
+      } else {
+        console.log(`${streamer.name}: ⚠️ 게시글을 찾지 못했습니다. 다음에 다시 시도합니다.`);
+      }
+      
+      return []; // 첫 모니터링에서는 알림 없음
+      
+    } catch (error) {
+      console.error(`${streamer.name}: 베이스라인 설정 실패:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * 마지막 게시글 이후의 새 게시글만 검색 (다중 페이지 지원)
+   */
+  private async searchFromLastPost(streamer: StreamerData, lastPostId?: string): Promise<CafePost[]> {
+    const maxPages = 3; // 최대 3페이지까지 탐색
+    const allNewPosts: CafePost[] = [];
+    
+    for (let page = 1; page <= maxPages; page++) {
+      try {
+        console.log(`${streamer.name}: 🔍 페이지 ${page} 탐색 중...`);
+        
+        const posts = await this.searchSinglePage(streamer, page);
+        
+        if (posts.length === 0) {
+          console.log(`${streamer.name}: 📄 페이지 ${page} - 게시글 없음, 탐색 중단`);
+          break;
+        }
+        
+        // 새 게시글 필터링
+        let newPosts: CafePost[] = [];
+        let foundLastPost = false;
+        
+        if (lastPostId) {
+          // 마지막 ID 이후의 새 게시글만 필터링
+          for (const post of posts) {
+            if (post.id === lastPostId) {
+              foundLastPost = true;
+              console.log(`${streamer.name}: 🎯 마지막 알림 게시글 발견 (ID: ${lastPostId}), 탐색 중단`);
+              break;
+            }
+            
+            // ID가 더 큰 경우 (더 최신) 새 게시글로 간주
+            if (parseInt(post.id) > parseInt(lastPostId)) {
+              newPosts.push(post);
+            }
+          }
+        } else {
+          // 마지막 ID가 없으면 모든 게시글을 새 게시글로 간주 (첫 페이지만)
+          newPosts = page === 1 ? posts.slice(0, 3) : []; // 안전을 위해 3개 제한
+        }
+        
+        allNewPosts.push(...newPosts);
+        console.log(`${streamer.name}: 📄 페이지 ${page} - ${newPosts.length}개 새 게시글 발견`);
+        
+        // 마지막 게시글을 찾았거나 새 게시글이 없으면 탐색 중단
+        if (foundLastPost || newPosts.length === 0) {
+          break;
+        }
+        
+        // 페이지 간 딜레이
+        await this.delay(1000);
+        
+      } catch (error) {
+        console.error(`${streamer.name}: 페이지 ${page} 탐색 실패:`, error);
+        break;
+      }
+    }
+    
+    // 최신 게시글이 있으면 상태 업데이트
+    if (allNewPosts.length > 0) {
+      const latestPost = allNewPosts[0]; // 이미 최신순으로 정렬됨
+      await this.databaseManager.setMonitorState(
+        streamer.id,
+        'cafe',
+        latestPost.id,
+        'checked'
+      );
+      console.log(`${streamer.name}: ✅ 총 ${allNewPosts.length}개 새 게시글 발견, 최신 ID: ${latestPost.id}`);
+    }
+    
+    return allNewPosts.slice(0, 15); // 최대 15개 제한
+  }
+
+  /**
+   * 단일 페이지에서 게시글 검색
+   */
+  private async searchSinglePage(streamer: StreamerData, page: number): Promise<CafePost[]> {
+    if (!this.page) return [];
+    
+    try {
+      // 작성자 검색 URL 생성 (페이지 번호 포함)  
+      if (!streamer.cafeNickname) {
+        console.warn(`${streamer.name}: 카페 닉네임이 없습니다.`);
+        return [];
+      }
+      
+      const encodedNickname = encodeURIComponent(streamer.cafeNickname);
+      const searchUrl = `https://cafe.naver.com/f-e/cafes/${streamer.cafeClubId || ''}/menus/0?ta=WRITER&q=${encodedNickname}&page=${page}`;
+      
+      const response = await this.page.goto(searchUrl, { 
+        waitUntil: 'domcontentloaded',
+        timeout: this.timeoutConfig.getBrowserTimeout('navigation')
+      });
+      
+      if (!response || response.status() !== 200) {
+        console.warn(`${streamer.name}: 페이지 ${page} 응답 상태: ${response?.status() || 'No response'}`);
+        return [];
+      }
+      
+      // 페이지 로딩 대기
+      await this.page.waitForTimeout(2000);
+      
+      // 게시글 목록 추출
+      const posts = await this.page.evaluate((targetNickname) => {
+        const posts: Array<{id: string, title: string, url: string, author: string, timestamp: string}> = [];
+        
+        // 다양한 셀렉터 시도
+        const possibleSelectors = [
+          'table tbody tr',
+          '.article-board tbody tr',
+          '.board-list tbody tr',
+          '.search-list tbody tr'
+        ];
+        
+        let postRows: NodeListOf<Element> | null = null;
+        
+        for (const selector of possibleSelectors) {
+          const foundRows = document.querySelectorAll(selector);
+          if (foundRows.length > 0) {
+            postRows = foundRows;
+            break;
+          }
+        }
+        
+        if (!postRows || postRows.length === 0) {
+          return [];
+        }
+        
+        postRows.forEach((row) => {
+          try {
+            // 닉네임 추출
+            let nickname = '';
+            const nicknameSelectors = [
+              '.ArticleBoardWriterInfo .nickname',
+              '.nickname',
+              '.writer .nickname',
+              '.author .nickname',
+              'td .nickname'
+            ];
+            
+            for (const selector of nicknameSelectors) {
+              const nicknameElement = row.querySelector(selector);
+              if (nicknameElement) {
+                nickname = nicknameElement.textContent?.trim() || '';
+                if (nickname) break;
+              }
+            }
+            
+            // 정확한 닉네임 매칭
+            if (nickname === targetNickname) {
+              // 게시글 ID 추출
+              let id = '';
+              const idElement = row.querySelector('td:first-child');
+              if (idElement) {
+                id = idElement.textContent?.trim() || '';
+              }
+              
+              if (!id) {
+                const linkElement = row.querySelector('a[href*="articleid"]');
+                if (linkElement) {
+                  const href = linkElement.getAttribute('href') || '';
+                  const match = href.match(/articleid=(\d+)/);
+                  id = match ? match[1] : '';
+                }
+              }
+              
+              // 제목과 URL 추출
+              let title = '';
+              let titleLink = '';
+              
+              const titleSelectors = [
+                '.board-list .article',
+                '.article',
+                'a[href*="articleid"]',
+                '.title a',
+                'td a[href*="articleid"]'
+              ];
+              
+              for (const selector of titleSelectors) {
+                const titleElement = row.querySelector(selector);
+                if (titleElement) {
+                  title = titleElement.textContent?.trim() || '';
+                  titleLink = titleElement.getAttribute('href') || '';
+                  if (title && titleLink) break;
+                }
+              }
+              
+              // 말머리 제거
+              title = title.replace(/^\[.*?\]\s*/, '');
+              
+              // URL 생성
+              const fullUrl = titleLink.startsWith('http') ? titleLink : `https://cafe.naver.com${titleLink}`;
+              
+              // 시간 추출
+              let timestamp = '';
+              const timeElements = row.querySelectorAll('.td_normal');
+              if (timeElements.length >= 2) {
+                timestamp = timeElements[timeElements.length - 2]?.textContent?.trim() || '';
+              }
+              
+              if (!timestamp) {
+                const timeSelectors = ['.date', '.time', '.td_date', 'td:nth-last-child(2)'];
+                for (const selector of timeSelectors) {
+                  const timeElement = row.querySelector(selector);
+                  if (timeElement) {
+                    const timeText = timeElement.textContent?.trim() || '';
+                    if (timeText.match(/\d{1,2}:\d{2}|\d{4}\.\d{1,2}\.\d{1,2}|\d{1,2}\.\d{1,2}/)) {
+                      timestamp = timeText;
+                      break;
+                    }
+                  }
+                }
+              }
+              
+              if (id && title && titleLink) {
+                posts.push({
+                  id,
+                  title,
+                  url: fullUrl,
+                  author: nickname,
+                  timestamp: timestamp || new Date().toISOString()
+                });
+              }
+            }
+          } catch (e) {
+            // 개별 행 처리 오류는 무시하고 계속 진행
+          }
+        });
+        
+        // ID 기준 내림차순 정렬 (최신순)
+        posts.sort((a, b) => parseInt(b.id) - parseInt(a.id));
+        
+        return posts;
+      }, streamer.cafeNickname);
+      
+      // 타임스탬프 변환
+      const formattedPosts: CafePost[] = posts.map(post => ({
+        id: post.id,
+        title: post.title,
+        url: post.url,
+        author: post.author,
+        timestamp: this.parseCafeDate(post.timestamp).toISOString()
+      }));
+      
+      return formattedPosts;
+      
+    } catch (error) {
+      console.error(`${streamer.name}: 페이지 ${page} 검색 실패:`, error);
+      return [];
+    }
+  }
+  // 특정 스트리머의 카페 글만 조용히 체크 (baseline 설정용)
+  async checkSingleStreamerPosts(streamer: StreamerData): Promise<CafePost[]> {
+    try {
+      return await this.checkStreamerPosts(streamer, true); // silent mode
+    } catch (error) {
+      console.error(`Failed to check cafe posts for ${streamer.name}:`, error);
+      return [];
+    }
+  }
+
+  // 사용자 ID 검증
+  async validateUserId(userId: string, cafeClubId: string): Promise<{ valid: boolean; error?: string }> {
+    try {
+      if (!await this.ensureLoggedIn()) {
+        return { valid: false, error: '네이버 로그인이 필요합니다' };
+      }
+
+      const testUrl = `https://cafe.naver.com/f-e/cafes/${cafeClubId}/members/${userId}`;
+      await this.page!.goto(testUrl, { waitUntil: 'networkidle' });
+      
+      // 실제 도달 URL 확인
+      const actualUrl = this.page!.url();
+      console.log(`실제 도달 URL: ${actualUrl}`);
+      
+      // menus 페이지로 리다이렉션된 경우 ca-fe URL로 시도
+      if (actualUrl.includes('/menus/') || !actualUrl.includes('/members/')) {
+        const fallbackUrl = `https://cafe.naver.com/ca-fe/cafes/${cafeClubId}/members/${userId}`;
+        console.log(`ca-fe URL로 시도: ${fallbackUrl}`);
+        
+        try {
+          await this.page!.goto(fallbackUrl, { waitUntil: 'domcontentloaded' });
+          const newUrl = this.page!.url();
+          
+          if (newUrl.includes('/menus/')) {
+            return { valid: false, error: '사용자 페이지에 접근할 수 없습니다 (권한 없음)' };
+          }
+        } catch (fallbackError) {
+          return { valid: false, error: '사용자 ID를 확인할 수 없습니다' };
+        }
+      }
+      
+      // 에러 페이지 확인
+      const errorElement = await this.page!.$('.error_content, .no_content');
+      if (errorElement) {
+        return { valid: false, error: '사용자를 찾을 수 없습니다' };
+      }
+      
+      // 게시물 목록 확인 (다양한 셀렉터)
+      const contentSelectors = [
+        '.article-board table tbody tr',
+        '.board-list tbody tr',
+        '.list-board tbody tr',
+        'table tbody tr'
+      ];
+      
+      let hasContent = false;
+      for (const selector of contentSelectors) {
+        const element = await this.page!.$(selector);
+        if (element) {
+          hasContent = true;
+          console.log(`게시물 목록 발견: ${selector}`);
+          break;
+        }
+      }
+      
+      if (hasContent) {
+        return { valid: true };
+      } else {
+        const validationUrl = this.page!.url();
+        return { valid: false, error: `게시물을 찾을 수 없습니다 (URL: ${validationUrl})` };
+      }
+    } catch (error) {
+      return { valid: false, error: '사용자 ID를 확인할 수 없습니다' };
     }
   }
 
@@ -915,7 +1324,7 @@ export class CafeMonitor {
           userAgentSection = true;
         } else if (line.toLowerCase().startsWith('user-agent:')) {
           userAgentSection = false;
-        } else if (userAgentSection && line.toLowerCase().includes('disallow: /ca-fe')) {
+        } else if (userAgentSection && (line.toLowerCase().includes('disallow: /ca-fe') || line.toLowerCase().includes('disallow: /f-e'))) {
           return false; // 카페 접근이 금지된 경우
         }
       }
@@ -964,44 +1373,6 @@ export class CafeMonitor {
     await this.delay(totalDelay);
   }
 
-  // 특정 스트리머의 카페 글만 조용히 체크 (baseline 설정용)
-  async checkSingleStreamerPosts(streamer: StreamerData): Promise<CafePost[]> {
-    try {
-      return await this.checkStreamerPosts(streamer, true); // silent mode
-    } catch (error) {
-      console.error(`Failed to check cafe posts for ${streamer.name}:`, error);
-      return [];
-    }
-  }
-
-  // 사용자 ID 검증
-  async validateUserId(userId: string, cafeClubId: string): Promise<{ valid: boolean; error?: string }> {
-    try {
-      if (!await this.ensureLoggedIn()) {
-        return { valid: false, error: '네이버 로그인이 필요합니다' };
-      }
-
-      const testUrl = `https://cafe.naver.com/ca-fe/cafes/${cafeClubId}/members/${userId}`;
-      await this.page!.goto(testUrl, { waitUntil: 'networkidle' });
-      
-      // 에러 페이지 확인
-      const errorElement = await this.page!.$('.error_content, .no_content');
-      if (errorElement) {
-        return { valid: false, error: '사용자를 찾을 수 없습니다' };
-      }
-      
-      // 게시물 목록 확인
-      const hasContent = await this.page!.$('.board-list, .article-board');
-      if (hasContent) {
-        return { valid: true };
-      } else {
-        return { valid: false, error: '게시물을 찾을 수 없습니다' };
-      }
-    } catch (error) {
-      return { valid: false, error: '사용자 ID를 확인할 수 없습니다' };
-    }
-  }
-
   // 메모리 캐시 초기화
   clearMemoryCache(): void {
     this.lastPostIds.clear();
@@ -1032,6 +1403,275 @@ export class CafeMonitor {
       if (id1 > id2) return 1;
       if (id1 < id2) return -1;
       return 0;
+    }
+  }
+
+  // ca-fe URL에서 직접 게시물 처리 (리다이렉션 방지)
+  private async processCafePageDirectly(streamer: StreamerData, currentUrl: string): Promise<CafePost[]> {
+    console.log(`${streamer.name}: ca-fe 직접 처리 모드 시작 - ${currentUrl}`);
+    
+    try {
+      // page가 null인지 확인
+      if (!this.page) {
+        console.error(`${streamer.name}: Page instance is null`);
+        return [];
+      }
+
+      // 페이지 안정성 확인 및 대기
+      console.log(`${streamer.name}: 🔄 페이지 안정성 확인 중...`);
+      
+      // 페이지가 완전히 로드될 때까지 대기
+      try {
+        await this.page.waitForLoadState('domcontentloaded', { timeout: 10000 });
+        console.log(`${streamer.name}: ✅ DOM 콘텐츠 로드 완료`);
+        
+        // 추가적인 안정성을 위해 네트워크 활동 대기
+        await this.page.waitForLoadState('networkidle', { timeout: 5000 });
+        console.log(`${streamer.name}: ✅ 네트워크 활동 안정화 완료`);
+      } catch (loadError) {
+        console.log(`${streamer.name}: ⚠️ 로드 상태 대기 실패, 계속 진행:`, (loadError as Error).message);
+      }
+      
+      // 페이지 컨텍스트 확인
+      const isPageValid = await this.page.evaluate(() => {
+        return document.readyState === 'complete' && !!document.body;
+      }).catch(() => false);
+      
+      if (!isPageValid) {
+        console.log(`${streamer.name}: ❌ 페이지 컨텍스트가 유효하지 않음`);
+        return [];
+      }
+      
+      console.log(`${streamer.name}: ✅ 페이지 컨텍스트 유효 확인 완료`);
+
+      // 게시물 목록 대기 (다양한 셀렉터 시도)
+      let foundContent = false;
+      const maxAttempts = 3;
+      
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        console.log(`${streamer.name}: 🔍 ca-fe 게시물 목록 찾기 시도 ${attempt}/${maxAttempts}`);
+        
+        // 현재 페이지의 전반적인 구조 확인
+        const pageStructure = await this.page.evaluate(() => {
+          const tables = document.querySelectorAll('table');
+          const iframes = document.querySelectorAll('iframe');
+          const divs = document.querySelectorAll('div[class*="article"], div[class*="board"], div[class*="list"]');
+          
+          return {
+            tablesCount: tables.length,
+            iframesCount: iframes.length,
+            articleDivsCount: divs.length,
+            bodyClasses: document.body?.className || 'no-classes',
+            hasMainContent: !!document.querySelector('#main, .main, [role="main"]')
+          };
+        });
+        console.log(`${streamer.name}: 📊 페이지 구조 분석:`, JSON.stringify(pageStructure, null, 2));
+        
+        try {
+          await this.page.waitForSelector('.article-board table tbody tr', { timeout: 8000 });
+          foundContent = true;
+          console.log(`${streamer.name}: ✅ ca-fe 기본 셀렉터로 게시물 목록 발견!`);
+          break;
+        } catch (selectorError) {
+          console.log(`${streamer.name}: ⚠️ ca-fe 기본 셀렉터 시도 ${attempt} 실패:`, (selectorError as Error).message);
+          console.log(`${streamer.name}: 🔄 대안 셀렉터들 시도 중...`);
+          
+          const alternativeSelectors = [
+            '.board-list tbody tr',
+            '.list-board tbody tr', 
+            '.cafe-article-list tbody tr',
+            'table tbody tr'
+          ];
+          
+          for (const selector of alternativeSelectors) {
+            try {
+              if (!this.page) {
+                console.error(`${streamer.name}: Page instance became null during alternative selector try`);
+                return [];
+              }
+              console.log(`${streamer.name}: 🔍 대안 셀렉터 시도: "${selector}"`);
+              await this.page.waitForSelector(selector, { timeout: 3000 });
+              console.log(`${streamer.name}: ✅ ca-fe 대안 셀렉터로 발견: "${selector}"`);
+              foundContent = true;
+              break;
+            } catch (altError) {
+              console.log(`${streamer.name}: ❌ 셀렉터 "${selector}" 실패:`, (altError as Error).message);
+            }
+          }
+          
+          if (foundContent) break;
+          
+          if (attempt < maxAttempts) {
+            console.log(`${streamer.name}: ca-fe ${attempt}번째 시도 실패, 2초 대기 후 재시도`);
+            if (!this.page) {
+              console.error(`${streamer.name}: Page instance became null during timeout wait`);
+              return [];
+            }
+            await this.page.waitForTimeout(2000);
+          }
+        }
+      }
+      
+      if (!foundContent) {
+        console.log(`${streamer.name}: ❌ ca-fe 모든 셀렉터 시도 실패, 게시물 목록을 찾을 수 없습니다.`);
+        
+        // 실패 시 페이지의 모든 가능한 요소들을 확인
+        const allElements = await this.page.evaluate(() => {
+          const allTables = Array.from(document.querySelectorAll('table')).map(t => ({
+            className: t.className,
+            id: t.id,
+            rowCount: t.querySelectorAll('tr').length
+          }));
+          
+          const allTbody = Array.from(document.querySelectorAll('tbody')).map(tb => ({
+            parentTag: tb.parentElement?.tagName,
+            parentClass: tb.parentElement?.className,
+            rowCount: tb.querySelectorAll('tr').length
+          }));
+          
+          return { allTables, allTbody };
+        });
+        console.log(`${streamer.name}: 📊 페이지의 모든 테이블 정보:`, JSON.stringify(allElements, null, 2));
+        
+        return [];
+      }
+      
+      // 게시물 데이터 추출
+      console.log(`${streamer.name}: 📄 게시물 데이터 추출 시작...`);
+      if (!this.page) {
+        console.error(`${streamer.name}: Page instance became null before data extraction`);
+        return [];
+      }
+      
+      // 안전한 페이지 평가를 위한 추가 체크
+      let posts: CafePost[] = [];
+      try {
+        posts = await this.page.evaluate(() => {
+        const extractPostsFromDocument = (doc: Document) => {
+          const possibleSelectors = [
+            '.article-board table tbody tr',
+            '.board-list tbody tr',
+            '.list-board tbody tr',
+            '.cafe-article-list tbody tr',
+            'table tbody tr'
+          ];
+          
+          let rows: NodeListOf<Element> | null = null;
+          let usedSelector = '';
+          
+          for (const selector of possibleSelectors) {
+            const foundRows = doc.querySelectorAll(selector);
+            if (foundRows.length > 0) {
+              rows = foundRows;
+              usedSelector = selector;
+              console.log(`ca-fe 게시물 셀렉터 성공: ${selector} (${foundRows.length}개 행)`);
+              break;
+            }
+          }
+          
+          if (!rows || rows.length === 0) {
+            console.log('ca-fe 모든 셀렉터에서 게시물을 찾을 수 없음');
+            return [];
+          }
+
+          const posts: any[] = [];
+          rows.forEach((row, index) => {
+            if (index >= 15) return;
+            
+            const articleCell = row.querySelector('td.td_article, .td_article, td:has(a[href*="articleid"])');
+            const dateCell = row.querySelector('td.td_date, .td_date, td:last-child');
+            const articleLink = articleCell?.querySelector('a[href*="articleid"]') || row.querySelector('a[href*="articleid"]');
+            
+            if (articleLink && dateCell) {
+              const title = articleLink.textContent?.trim();
+              const href = articleLink.getAttribute('href');
+              const date = dateCell.textContent?.trim();
+              const articleIdMatch = href?.match(/articleid=(\d+)/);
+              const articleId = articleIdMatch ? articleIdMatch[1] : '';
+              
+              if (title && href && articleId) {
+                posts.push({
+                  title,
+                  url: href.startsWith('http') ? href : `https://cafe.naver.com${href}`,
+                  date,
+                  id: articleId
+                });
+              }
+            }
+          });
+
+          return posts;
+        };
+        
+        const posts = extractPostsFromDocument(document);
+        const extractionUrl = window.location.href;
+        
+        console.log(`ca-fe 직접 처리: ${posts.length}개 게시물 추출 (URL: ${extractionUrl})`);
+        
+        return posts;
+      });
+      } catch (evaluateError) {
+        console.error(`${streamer.name}: ❌ 페이지 평가 중 오류 발생:`, (evaluateError as Error).message);
+        
+        // Execution context destroyed 오류인 경우 특별 처리
+        if ((evaluateError as Error).message.includes('Execution context was destroyed')) {
+          console.log(`${streamer.name}: 🔄 실행 컨텍스트 파괴됨, 페이지 재로드 시도`);
+          
+          try {
+            // 페이지 새로고침 시도
+            await this.page.reload({ waitUntil: 'domcontentloaded', timeout: 10000 });
+            console.log(`${streamer.name}: ✅ 페이지 재로드 완료`);
+            
+            // 짧은 대기 후 다시 시도
+            await this.page.waitForTimeout(2000);
+            
+            posts = await this.page.evaluate(() => {
+              const tables = document.querySelectorAll('table tbody tr');
+              console.log(`재시도: ${tables.length}개 테이블 행 발견`);
+              return [];
+            });
+            
+          } catch (retryError) {
+            console.error(`${streamer.name}: ❌ 페이지 재로드 및 재시도 실패:`, (retryError as Error).message);
+            return [];
+          }
+        } else {
+          return [];
+        }
+      }
+      
+      console.log(`${streamer.name}: ✅ ca-fe 직접 처리 완료 - ${posts.length}개 게시물 발견`);
+      
+      if (posts.length === 0) {
+        console.log(`${streamer.name}: ⚠️ 게시물이 0개 발견됨 - 추가 디버깅 정보 수집`);
+        
+        // 페이지에서 실제로 찾을 수 있는 모든 링크와 텍스트 확인
+        const debugInfo = await this.page.evaluate(() => {
+          const allLinks = Array.from(document.querySelectorAll('a')).map(link => ({
+            href: link.href,
+            text: link.textContent?.trim().substring(0, 50) || '',
+            className: link.className
+          })).filter(link => link.text.length > 0).slice(0, 10);
+          
+          const allTextContent = document.body?.innerText?.substring(0, 500) || '';
+          
+          return {
+            linksFound: allLinks.length,
+            sampleLinks: allLinks,
+            bodyTextPreview: allTextContent.replace(/\s+/g, ' ').trim()
+          };
+        });
+        
+        console.log(`${streamer.name}: 🔍 페이지 디버깅 정보:`, JSON.stringify(debugInfo, null, 2));
+      } else {
+        console.log(`${streamer.name}: 📋 발견된 게시물 미리보기:`, posts.slice(0, 3).map(p => `"${p.title}" (${p.id})`));
+      }
+      
+      return posts;
+      
+    } catch (error) {
+      console.error(`${streamer.name}: ca-fe 직접 처리 중 오류:`, error);
+      return [];
     }
   }
 

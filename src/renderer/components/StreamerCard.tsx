@@ -126,7 +126,7 @@ const StreamerCard: React.FC<StreamerCardProps> = ({
                     🐦 Twitter
                   </span>
                 )}
-                {streamer.naverCafeUserId && (
+                {streamer.cafeNickname && (
                   <span className="badge badge-success platform-cafe whitespace-nowrap" title="네이버 카페">
                     💬 Cafe
                   </span>
@@ -231,15 +231,18 @@ const StreamerCard: React.FC<StreamerCardProps> = ({
               
               <div className="input-group">
                 <label className="input-label">
-                  💬 네이버 카페 사용자 ID
+                  💬 네이버 카페 닉네임
                 </label>
                 <input
                   type="text"
-                  value={editData.naverCafeUserId || ''}
-                  onChange={(e) => setEditData({ ...editData, naverCafeUserId: e.target.value })}
+                  value={editData.cafeNickname || ''}
+                  onChange={(e) => setEditData({ ...editData, cafeNickname: e.target.value })}
                   className="input"
-                  placeholder="네이버 카페 사용자 ID"
+                  placeholder="예: 아리사"
                 />
+                <p className="text-xs text-gray-400 mt-1">
+                  💡 카페에서 사용하는 닉네임을 정확히 입력해주세요
+                </p>
               </div>
               
               <div className="input-group">
